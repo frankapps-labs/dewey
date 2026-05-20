@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dewey_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DEWEY_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/dewey_test
+      DEWEY_TEST_DATABASE_URL_ASYNC: postgresql+asyncpg://postgres:postgres@localhost:5432/dewey_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Run linting
+        run: uv run ruff check src/ tests/
+
+      - name: Run format check
+        run: uv run ruff format --check src/ tests/
+
+      - name: Run typecheck
+        run: uv run basedpyright
+
+      - name: Run tests
+        run: uv run pytest
+
+  coverage:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dewey_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DEWEY_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/dewey_test
+      DEWEY_TEST_DATABASE_URL_ASYNC: postgresql+asyncpg://postgres:postgres@localhost:5432/dewey_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Run tests with coverage
+        run: uv run pytest --cov=dewey --cov-report=lcov
+
+      - name: Check Coveralls availability
+        id: coveralls_check
+        run: curl -sf --max-time 10 https://coveralls.io > /dev/null && echo "available=true" >> "$GITHUB_OUTPUT" || echo "available=false" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to Coveralls
+        if: steps.coveralls_check.outputs.available == 'true'
+        uses: coverallsapp/github-action@v2
+        with:
+          file: coverage.lcov
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Build package
+        run: uv build
+
+      - name: Check package metadata
+        run: uv run twine check dist/*
