@@ -28,7 +28,7 @@ def _to_dataclass(row: TaskEntryModel) -> TaskEntry:
         error=row.error,
         created_at=row.created_at,
         updated_at=row.updated_at,
-        process_after=row.process_after,
+        scheduled_for=row.scheduled_for,
         started_at=row.started_at,
         completed_at=row.completed_at,
         idempotency_key=row.idempotency_key,
@@ -168,7 +168,7 @@ def retry_task(session: Session, task_id: str) -> TaskEntry | None:
         return _to_dataclass(task)
 
     task.status = TaskStatus.PENDING.value
-    task.process_after = None
+    task.scheduled_for = None
     task.error = ""
     task.attempts = 0
     session.flush()
@@ -204,7 +204,7 @@ def bulk_retry(
         stmt = stmt.where(TaskEntryModel.task_type == task_type)
     stmt = stmt.values(
         status=TaskStatus.PENDING.value,
-        process_after=None,
+        scheduled_for=None,
         error="",
         attempts=0,
     )

@@ -18,7 +18,7 @@ DEFAULT_STUCK_THRESHOLD_MINUTES = 10
 
 def sweep_failed(limit: int = 100) -> list[str]:
     """
-    Find FAILED tasks ready for retry (process_after has passed).
+    Find FAILED tasks ready for retry (scheduled_for has passed).
     Resets them to PENDING so the broker can pick them up.
 
     Returns list of task IDs that were re-enqueued.
@@ -30,9 +30,9 @@ def sweep_failed(limit: int = 100) -> list[str]:
             TaskEntry.objects.select_for_update()
             .filter(
                 status=TaskStatus.FAILED.value,
-                process_after__lte=now,
+                scheduled_for__lte=now,
             )
-            .order_by("process_after")
+            .order_by("scheduled_for")
             .values_list("id", flat=True)[:limit]
         )
 

@@ -177,7 +177,7 @@ class TestSendNotification:
         assert updated.status == NotificationStatus.FAILED
         assert updated.error == "SMTP timeout"
         assert updated.attempts == 1
-        assert updated.process_after is not None  # backoff set
+        assert updated.scheduled_for is not None  # backoff set
 
     def test_failed_send_dead_letters_at_max(self, session):
         notif = create_notification(
@@ -249,14 +249,14 @@ class TestSendNotification:
         result = send_notification(session, notif.id, channel)
         assert result is False
 
-    def test_send_respects_process_after(self, session):
+    def test_send_respects_scheduled_for(self, session):
         future = datetime.now(UTC) + timedelta(hours=1)
         notif = create_notification(
             session,
             event_type="test",
             channel="email",
             recipient="a@b.com",
-            process_after=future,
+            scheduled_for=future,
         )
         session.commit()
 
@@ -315,7 +315,7 @@ class TestAttemptTracking:
         session.execute(
             update(NotificationEntryModel)
             .where(NotificationEntryModel.id == notif.id)
-            .values(status=NotificationStatus.PENDING.value, process_after=None)
+            .values(status=NotificationStatus.PENDING.value, scheduled_for=None)
         )
         session.commit()
 
@@ -367,13 +367,13 @@ class TestSweep:
         )
         session.commit()
 
-        # Mark as failed with past process_after
+        # Mark as failed with past scheduled_for
         session.execute(
             update(NotificationEntryModel)
             .where(NotificationEntryModel.id == notif.id)
             .values(
                 status=NotificationStatus.FAILED.value,
-                process_after=datetime.now(UTC) - timedelta(minutes=5),
+                scheduled_for=datetime.now(UTC) - timedelta(minutes=5),
                 attempts=1,
             )
         )
@@ -422,13 +422,13 @@ class TestSweep:
         )
         session.commit()
 
-        # Failed but process_after is in the future
+        # Failed but scheduled_for is in the future
         session.execute(
             update(NotificationEntryModel)
             .where(NotificationEntryModel.id == notif.id)
             .values(
                 status=NotificationStatus.FAILED.value,
-                process_after=datetime.now(UTC) + timedelta(hours=1),
+                scheduled_for=datetime.now(UTC) + timedelta(hours=1),
             )
         )
         session.commit()

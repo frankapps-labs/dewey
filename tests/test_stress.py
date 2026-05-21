@@ -201,14 +201,14 @@ class TestConcurrentSweepAndProcess:
                 task_ids.append(task.id)
             session.commit()
 
-        # Mark them as failed with past process_after
+        # Mark them as failed with past scheduled_for
         with Session(engine) as session:
             session.execute(
                 update(TaskEntryModel)
                 .where(TaskEntryModel.id.in_(task_ids))
                 .values(
                     status=TaskStatus.FAILED.value,
-                    process_after=datetime.now(UTC) - timedelta(minutes=5),
+                    scheduled_for=datetime.now(UTC) - timedelta(minutes=5),
                     attempts=1,
                 )
             )
@@ -304,14 +304,14 @@ class TestRetryLifecycle:
             task = session.get(TaskEntryModel, task_id)
             assert task.status == TaskStatus.FAILED.value
             assert task.attempts == 1
-            assert task.process_after is not None
+            assert task.scheduled_for is not None
 
-        # Fast-forward process_after for sweep to pick up
+        # Fast-forward scheduled_for for sweep to pick up
         with Session(engine) as session:
             session.execute(
                 update(TaskEntryModel)
                 .where(TaskEntryModel.id == task_id)
-                .values(process_after=datetime.now(UTC) - timedelta(minutes=1))
+                .values(scheduled_for=datetime.now(UTC) - timedelta(minutes=1))
             )
             session.commit()
 
@@ -352,7 +352,7 @@ class TestRetryLifecycle:
             session.execute(
                 update(TaskEntryModel)
                 .where(TaskEntryModel.id == task_id)
-                .values(process_after=datetime.now(UTC) - timedelta(minutes=1))
+                .values(scheduled_for=datetime.now(UTC) - timedelta(minutes=1))
             )
             session.commit()
         with Session(engine) as session:

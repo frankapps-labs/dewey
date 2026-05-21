@@ -45,14 +45,14 @@ class TestCreateTask:
         )
         assert task.idempotency_key == "order-123-confirm"
 
-    def test_creates_with_process_after(self, session):
+    def test_creates_with_scheduled_for(self, session):
         future = datetime(2026, 12, 1, tzinfo=UTC)
         task = create_task(
             session,
             task_type="reminder.send",
-            process_after=future,
+            scheduled_for=future,
         )
-        assert task.process_after == future
+        assert task.scheduled_for == future
 
     def test_creates_with_metadata(self, session):
         task = create_task(
@@ -100,7 +100,7 @@ class TestProcessTask:
         assert updated.status == TaskStatus.FAILED.value
         assert updated.attempts == 1
         assert "Something went wrong" in updated.error
-        assert updated.process_after is not None  # Backoff set
+        assert updated.scheduled_for is not None  # Backoff set
 
     def test_failed_processing_backoff_starts_at_failure_time(self, session):
         task = create_task(session, task_type="test.task", max_attempts=5)
@@ -119,7 +119,7 @@ class TestProcessTask:
         updated = session.execute(
             select(TaskEntryModel).where(TaskEntryModel.id == task.id)
         ).scalar_one()
-        assert updated.process_after >= failure_time
+        assert updated.scheduled_for >= failure_time
 
     def test_dead_letter_after_max_attempts(self, session):
         task = create_task(session, task_type="test.task", max_attempts=1)
@@ -168,9 +168,9 @@ class TestProcessTask:
         assert result is False
 
     def test_skip_task_not_ready(self, session):
-        """Tasks with future process_after should be skipped."""
+        """Tasks with future scheduled_for should be skipped."""
         future = datetime.now(UTC) + timedelta(hours=1)
-        task = create_task(session, task_type="test.task", process_after=future)
+        task = create_task(session, task_type="test.task", scheduled_for=future)
         session.commit()
 
         result = process_task(session, task.id, lambda t, p: None)
@@ -181,10 +181,10 @@ class TestProcessTask:
         ).scalar_one()
         assert updated.status == TaskStatus.PENDING.value
 
-    def test_processes_task_past_process_after(self, session):
-        """Tasks with past process_after should be processed."""
+    def test_processes_task_past_scheduled_for(self, session):
+        """Tasks with past scheduled_for should be processed."""
         past = datetime.now(UTC) - timedelta(minutes=5)
-        task = create_task(session, task_type="test.task", process_after=past)
+        task = create_task(session, task_type="test.task", scheduled_for=past)
         session.commit()
 
         result = process_task(session, task.id, lambda t, p: None)

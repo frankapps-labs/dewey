@@ -24,7 +24,7 @@ class TaskEntry:
     error: str
     created_at: datetime
     updated_at: datetime
-    process_after: datetime | None = None
+    scheduled_for: datetime | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
     idempotency_key: str | None = None

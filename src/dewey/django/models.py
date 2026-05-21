@@ -56,7 +56,7 @@ class TaskEntry(models.Model):
     # Timestamps
     created_at = models.DateTimeField(default=lambda: datetime.now(UTC), db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
-    process_after = models.DateTimeField(null=True, blank=True)
+    scheduled_for = models.DateTimeField(null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
 
@@ -74,7 +74,7 @@ class TaskEntry(models.Model):
         indexes = [
             # Partial index: pending tasks ready to process
             models.Index(
-                fields=["process_after"],
+                fields=["scheduled_for"],
                 name="ix_task_entries_pending_pa",
                 condition=models.Q(status="pending"),
             ),
@@ -86,7 +86,7 @@ class TaskEntry(models.Model):
             ),
             # Partial index: failed tasks eligible for retry
             models.Index(
-                fields=["process_after"],
+                fields=["scheduled_for"],
                 name="ix_task_entries_failed_pa",
                 condition=models.Q(status="failed"),
             ),
@@ -116,7 +116,7 @@ class TaskEntry(models.Model):
             error=self.error,
             created_at=self.created_at,
             updated_at=self.updated_at,
-            process_after=self.process_after,
+            scheduled_for=self.scheduled_for,
             started_at=self.started_at,
             completed_at=self.completed_at,
             idempotency_key=self.idempotency_key,

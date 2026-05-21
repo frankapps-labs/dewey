@@ -74,7 +74,7 @@ class NotificationEntryModel(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
     )
-    process_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Relationship to attempts
@@ -87,8 +87,8 @@ class NotificationEntryModel(Base):
     __table_args__ = (
         # Partial index: pending notifications ready to send
         Index(
-            "ix_notif_pending_process_after",
-            "process_after",
+            "ix_notif_pending_scheduled_for",
+            "scheduled_for",
             postgresql_where=(status == NotificationStatus.PENDING.value),
         ),
         # Partial index: stuck sending notifications
@@ -99,8 +99,8 @@ class NotificationEntryModel(Base):
         ),
         # Partial index: failed notifications eligible for retry
         Index(
-            "ix_notif_failed_process_after",
-            "process_after",
+            "ix_notif_failed_scheduled_for",
+            "scheduled_for",
             postgresql_where=(status == NotificationStatus.FAILED.value),
         ),
         # Composite: notifications by task

@@ -68,8 +68,8 @@ class TestSyncTaskBackoff:
             TaskEntryModel.__table__.select().where(TaskEntryModel.id == task_id)
         ).one()
         assert row.status == TaskStatus.FAILED.value
-        # process_after should be ~7s in the future (within a generous window).
-        delta = (row.process_after - before).total_seconds()
+        # scheduled_for should be ~7s in the future (within a generous window).
+        delta = (row.scheduled_for - before).total_seconds()
         assert 6 <= delta <= 12, f"expected ~7s, got {delta}s"
 
     def test_default_backoff_when_omitted(self, session):
@@ -84,7 +84,7 @@ class TestSyncTaskBackoff:
             TaskEntryModel.__table__.select().where(TaskEntryModel.id == task_id)
         ).one()
         # Default task backoff is ~120s base (±25% jitter): expect well over 7s.
-        delta = (row.process_after - before).total_seconds()
+        delta = (row.scheduled_for - before).total_seconds()
         assert delta > 30, f"expected default backoff > 30s, got {delta}s"
 
 
@@ -109,7 +109,7 @@ class TestAsyncTaskBackoff:
             TaskEntryModel.__table__.select().where(TaskEntryModel.id == task_id)
         )
         row = result.one()
-        delta = (row.process_after - before).total_seconds()
+        delta = (row.scheduled_for - before).total_seconds()
         assert 2 <= delta <= 8, f"expected ~3s, got {delta}s"
 
 
@@ -136,7 +136,7 @@ class TestNotificationBackoff:
         row = session.execute(
             NotificationEntryModel.__table__.select().where(NotificationEntryModel.id == nid)
         ).one()
-        delta = (row.process_after - before).total_seconds()
+        delta = (row.scheduled_for - before).total_seconds()
         assert 3 <= delta <= 9, f"expected ~4s, got {delta}s"
 
     def test_process_forwards_backoff(self, session):
@@ -155,7 +155,7 @@ class TestNotificationBackoff:
         row = session.execute(
             NotificationEntryModel.__table__.select().where(NotificationEntryModel.id == nid)
         ).one()
-        delta = (row.process_after - before).total_seconds()
+        delta = (row.scheduled_for - before).total_seconds()
         assert 4 <= delta <= 10, f"expected ~5s, got {delta}s"
 
     @pytest.mark.asyncio
@@ -179,7 +179,7 @@ class TestNotificationBackoff:
             NotificationEntryModel.__table__.select().where(NotificationEntryModel.id == nid)
         )
         row = result.one()
-        delta = (row.process_after - before).total_seconds()
+        delta = (row.scheduled_for - before).total_seconds()
         assert 2 <= delta <= 8, f"expected ~3s, got {delta}s"
 
     @pytest.mark.asyncio
@@ -206,5 +206,5 @@ class TestNotificationBackoff:
             NotificationEntryModel.__table__.select().where(NotificationEntryModel.id == nid)
         )
         row = result.one()
-        delta = (row.process_after - before).total_seconds()
+        delta = (row.scheduled_for - before).total_seconds()
         assert 4 <= delta <= 10, f"expected ~5s, got {delta}s"

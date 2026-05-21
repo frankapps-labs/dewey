@@ -13,7 +13,7 @@ Tasks move through five states:
 | **DEAD** | Max attempts reached, needs human decision | Terminal |
 
 **Sweep behavior:**
-- Failed tasks past their `process_after` time → reset to PENDING, or DEAD if attempts are exhausted
+- Failed tasks past their `scheduled_for` time → reset to PENDING, or DEAD if attempts are exhausted
 - Tasks stuck in PROCESSING for >10 minutes (configurable) → reset to PENDING, or DEAD if attempts are exhausted
 
 ### Notification States

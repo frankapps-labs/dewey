@@ -52,7 +52,7 @@ def create_notification(
     payload: dict[str, Any] | None = None,
     task_id: str | None = None,
     max_attempts: int = 3,
-    process_after=None,
+    scheduled_for=None,
     metadata: dict[str, Any] | None = None,
 ) -> NotificationEntryDC:
     """Write a notification to the ledger."""
@@ -65,7 +65,7 @@ def create_notification(
         payload=payload or {},
         task_id=task_id,
         max_attempts=max_attempts,
-        process_after=process_after,
+        scheduled_for=scheduled_for,
         metadata=metadata or {},
     )
     logger.info(
@@ -156,7 +156,7 @@ def send_notification(
             logger.info("Notification not pending id=%s status=%s", notification_id, notif.status)
             return False
 
-        if notif.process_after and notif.process_after > now:
+        if notif.scheduled_for and notif.scheduled_for > now:
             logger.info("Notification not ready id=%s", notification_id)
             return False
 
@@ -238,7 +238,7 @@ def send_notification(
                 )
             else:
                 notif.status = NotificationStatus.FAILED.value
-                notif.process_after = now + (backoff or default_notification_backoff)(attempts)
+                notif.scheduled_for = now + (backoff or default_notification_backoff)(attempts)
                 logger.warning(
                     "Notification failed id=%s channel=%s attempts=%d/%d",
                     notification_id,
@@ -247,7 +247,7 @@ def send_notification(
                     max_attempts,
                 )
 
-            notif.save(update_fields=["status", "error", "process_after", "updated_at"])
+            notif.save(update_fields=["status", "error", "scheduled_for", "updated_at"])
 
         return False
     finally:
@@ -290,9 +290,9 @@ def sweep_failed_notifications(limit: int = 100) -> list[str]:
     ids = list(
         NotificationEntry.objects.filter(
             status=NotificationStatus.FAILED.value,
-            process_after__lte=now,
+            scheduled_for__lte=now,
         )
-        .order_by("process_after")
+        .order_by("scheduled_for")
         .values_list("id", flat=True)[:limit]
     )
     if not ids:
@@ -385,12 +385,12 @@ def get_pending_notifications(
     limit: int = 50,
     channel: str | None = None,
 ) -> list[NotificationEntryDC]:
-    """Pending notifications ready to send (process_after has passed or is NULL)."""
+    """Pending notifications ready to send (scheduled_for has passed or is NULL)."""
     now = datetime.now(UTC)
     qs = NotificationEntry.objects.filter(
         status=NotificationStatus.PENDING.value,
     ).filter(
-        models.Q(process_after__isnull=True) | models.Q(process_after__lte=now),
+        models.Q(scheduled_for__isnull=True) | models.Q(scheduled_for__lte=now),
     )
     if channel:
         qs = qs.filter(channel=channel)
@@ -432,10 +432,10 @@ def retry_notification(notification_id: str) -> NotificationEntryDC | None:
         return notif.to_dataclass()
 
     notif.status = NotificationStatus.PENDING.value
-    notif.process_after = None
+    notif.scheduled_for = None
     notif.error = ""
     notif.attempts = 0
-    notif.save(update_fields=["status", "process_after", "error", "attempts", "updated_at"])
+    notif.save(update_fields=["status", "scheduled_for", "error", "attempts", "updated_at"])
     return notif.to_dataclass()
 
 

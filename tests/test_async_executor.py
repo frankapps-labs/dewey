@@ -139,7 +139,7 @@ async def test_process_task_failure_backoff_starts_at_failure_time(async_session
     assert result is False
 
     row = await async_session.get(TaskEntryModel, task.id)
-    assert row.process_after >= failure_time
+    assert row.scheduled_for >= failure_time
 
 
 @pytest.mark.asyncio
@@ -194,7 +194,7 @@ async def test_process_task_already_completed(async_session):
 
 
 @pytest.mark.asyncio
-async def test_process_task_respects_process_after(async_session):
+async def test_process_task_respects_scheduled_for(async_session):
     from datetime import datetime, timedelta
 
     future = datetime.now(UTC) + timedelta(hours=1)
@@ -202,7 +202,7 @@ async def test_process_task_respects_process_after(async_session):
         async_session,
         task_type="scan",
         payload={},
-        process_after=future,
+        scheduled_for=future,
     )
     await async_session.commit()
 

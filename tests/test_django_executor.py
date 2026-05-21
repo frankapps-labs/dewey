@@ -115,7 +115,7 @@ class TestProcessTask:
         from dewey.django.models import TaskEntry
 
         updated = TaskEntry.objects.get(id=task.id)
-        assert updated.process_after >= failure_time
+        assert updated.scheduled_for >= failure_time
 
     def test_dead_letter_after_max_attempts(self):
         task = create_task(task_type="test.task", max_attempts=1)
@@ -143,9 +143,9 @@ class TestProcessTask:
         assert result is False
 
     def test_skip_task_not_ready(self):
-        """Tasks with future process_after should be skipped."""
+        """Tasks with future scheduled_for should be skipped."""
         future = timezone.now() + timedelta(hours=1)
-        task = create_task(task_type="test.task", process_after=future)
+        task = create_task(task_type="test.task", scheduled_for=future)
 
         result = process_task(task.id, handler=lambda t, p: None)
         assert result is False

@@ -126,10 +126,10 @@ def retry_task(task_id: str) -> TaskEntryDC | None:
         return task.to_dataclass()
 
     task.status = TaskStatus.PENDING.value
-    task.process_after = None
+    task.scheduled_for = None
     task.error = ""
     task.attempts = 0
-    task.save(update_fields=["status", "process_after", "error", "attempts", "updated_at"])
+    task.save(update_fields=["status", "scheduled_for", "error", "attempts", "updated_at"])
     return task.to_dataclass()
 
 
@@ -153,7 +153,7 @@ def bulk_retry(
         qs = qs.filter(task_type=task_type)
     return qs.update(
         status=TaskStatus.PENDING.value,
-        process_after=None,
+        scheduled_for=None,
         error="",
         attempts=0,
     )

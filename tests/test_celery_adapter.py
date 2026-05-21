@@ -239,7 +239,7 @@ class TestIntegrationWithTaskledger:
                 .where(TaskEntryModel.id == task_id)
                 .values(
                     status=TaskStatus.FAILED.value,
-                    process_after=datetime.now(UTC) - timedelta(minutes=5),
+                    scheduled_for=datetime.now(UTC) - timedelta(minutes=5),
                     attempts=1,
                 )
             )

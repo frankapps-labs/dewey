@@ -9,10 +9,10 @@ from dewey.sqlalchemy.sweep import sweep, sweep_failed, sweep_stuck
 
 
 class TestSweepFailed:
-    def test_re_enqueues_failed_tasks_past_process_after(self, session):
+    def test_re_enqueues_failed_tasks_past_scheduled_for(self, session):
         task = create_task(session, task_type="test.task")
         task.status = TaskStatus.FAILED.value
-        task.process_after = datetime.now(UTC) - timedelta(minutes=1)
+        task.scheduled_for = datetime.now(UTC) - timedelta(minutes=1)
         session.commit()
 
         ids = sweep_failed(session)
@@ -25,7 +25,7 @@ class TestSweepFailed:
     def test_skips_failed_tasks_not_yet_ready(self, session):
         task = create_task(session, task_type="test.task")
         task.status = TaskStatus.FAILED.value
-        task.process_after = datetime.now(UTC) + timedelta(hours=1)
+        task.scheduled_for = datetime.now(UTC) + timedelta(hours=1)
         session.commit()
 
         ids = sweep_failed(session)
@@ -39,7 +39,7 @@ class TestSweepFailed:
         task = create_task(session, task_type="test.task", max_attempts=1)
         task.status = TaskStatus.FAILED.value
         task.attempts = 1
-        task.process_after = datetime.now(UTC) - timedelta(minutes=1)
+        task.scheduled_for = datetime.now(UTC) - timedelta(minutes=1)
         session.commit()
 
         ids = sweep_failed(session)
@@ -104,7 +104,7 @@ class TestSweepCombined:
         # One failed task ready for retry
         failed = create_task(session, task_type="test.fail")
         failed.status = TaskStatus.FAILED.value
-        failed.process_after = datetime.now(UTC) - timedelta(minutes=1)
+        failed.scheduled_for = datetime.now(UTC) - timedelta(minutes=1)
 
         # One stuck processing task
         stuck = create_task(session, task_type="test.stuck")

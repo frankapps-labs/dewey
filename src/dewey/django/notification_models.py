@@ -64,14 +64,14 @@ class NotificationEntry(models.Model):
     # Timestamps
     created_at = models.DateTimeField(default=lambda: datetime.now(UTC), db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
-    process_after = models.DateTimeField(null=True, blank=True)
+    scheduled_for = models.DateTimeField(null=True, blank=True)
     sent_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "notification_entries"
         indexes = [
             models.Index(
-                fields=["process_after"],
+                fields=["scheduled_for"],
                 name="ix_notif_pending_pa",
                 condition=models.Q(status="pending"),
             ),
@@ -81,7 +81,7 @@ class NotificationEntry(models.Model):
                 condition=models.Q(status="sending"),
             ),
             models.Index(
-                fields=["process_after"],
+                fields=["scheduled_for"],
                 name="ix_notif_failed_pa",
                 condition=models.Q(status="failed"),
             ),
@@ -116,7 +116,7 @@ class NotificationEntry(models.Model):
             error=self.error,
             created_at=self.created_at,
             updated_at=self.updated_at,
-            process_after=self.process_after,
+            scheduled_for=self.scheduled_for,
             sent_at=self.sent_at,
             metadata=self.metadata,
         )

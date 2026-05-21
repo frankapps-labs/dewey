@@ -240,7 +240,7 @@ async def test_sweep_failed_notifications(async_session):
 
     row = await async_session.get(NotificationEntryModel, notif.id)
     row.status = NotificationStatus.FAILED.value
-    row.process_after = datetime.now(UTC) - timedelta(minutes=1)
+    row.scheduled_for = datetime.now(UTC) - timedelta(minutes=1)
     await async_session.commit()
 
     ids = await sweep_failed_notifications_async(async_session)
@@ -301,13 +301,13 @@ async def test_get_pending_notifications(async_session):
 
 
 @pytest.mark.asyncio
-async def test_get_pending_notifications_respects_process_after(async_session):
+async def test_get_pending_notifications_respects_scheduled_for(async_session):
     notif = await create_notification_async(
         async_session,
         event_type="test",
         channel="email",
         recipient="a@b.com",
-        process_after=datetime.now(UTC) + timedelta(hours=1),
+        scheduled_for=datetime.now(UTC) + timedelta(hours=1),
     )
     await async_session.commit()
 

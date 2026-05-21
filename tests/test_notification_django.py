@@ -229,7 +229,7 @@ class TestSweep:
         )
         NotificationEntry.objects.filter(id=notif.id).update(
             status=NotificationStatus.FAILED.value,
-            process_after=datetime.now(UTC) - timedelta(minutes=5),
+            scheduled_for=datetime.now(UTC) - timedelta(minutes=5),
             attempts=1,
         )
         swept = sweep_failed_notifications()

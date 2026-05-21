@@ -54,7 +54,7 @@ def _to_entry(row: NotificationEntryModel) -> NotificationEntry:
         error=row.error,
         created_at=row.created_at,
         updated_at=row.updated_at,
-        process_after=row.process_after,
+        scheduled_for=row.scheduled_for,
         sent_at=row.sent_at,
         metadata=row.notification_metadata,
     )
@@ -90,7 +90,7 @@ def create_notification(
     payload: dict[str, Any] | None = None,
     task_id: str | None = None,
     max_attempts: int = 3,
-    process_after: datetime | None = None,
+    scheduled_for: datetime | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> NotificationEntry:
     """
@@ -107,7 +107,7 @@ def create_notification(
         payload=payload or {},
         task_id=task_id,
         max_attempts=max_attempts,
-        process_after=process_after,
+        scheduled_for=scheduled_for,
         notification_metadata=metadata or {},
     )
     session.add(notif)
@@ -216,9 +216,9 @@ def send_notification(
         logger.info("Notification not pending id=%s status=%s", notification_id, notif.status)
         return False
 
-    if notif.process_after and notif.process_after > now:
+    if notif.scheduled_for and notif.scheduled_for > now:
         logger.info(
-            "Notification not ready id=%s process_after=%s", notification_id, notif.process_after
+            "Notification not ready id=%s scheduled_for=%s", notification_id, notif.scheduled_for
         )
         return False
 
@@ -315,7 +315,7 @@ def send_notification(
             )
         else:
             notif.status = NotificationStatus.FAILED.value
-            notif.process_after = now + (backoff or default_notification_backoff)(attempts)
+            notif.scheduled_for = now + (backoff or default_notification_backoff)(attempts)
             logger.warning(
                 "Notification failed id=%s channel=%s attempts=%d/%d error=%s",
                 notification_id,
@@ -381,9 +381,9 @@ def sweep_failed_notifications(
         select(NotificationEntryModel.id)
         .where(
             NotificationEntryModel.status == NotificationStatus.FAILED.value,
-            NotificationEntryModel.process_after <= now,
+            NotificationEntryModel.scheduled_for <= now,
         )
-        .order_by(NotificationEntryModel.process_after)
+        .order_by(NotificationEntryModel.scheduled_for)
         .limit(limit)
     )
     ids = list(session.execute(stmt).scalars().all())
@@ -512,13 +512,13 @@ def get_pending_notifications(
     limit: int = 50,
     channel: str | None = None,
 ) -> list[NotificationEntry]:
-    """Pending notifications ready to send (process_after has passed or is NULL)."""
+    """Pending notifications ready to send (scheduled_for has passed or is NULL)."""
     now = datetime.now(UTC)
     stmt = select(NotificationEntryModel).where(
         NotificationEntryModel.status == NotificationStatus.PENDING.value,
         (
-            NotificationEntryModel.process_after.is_(None)
-            | (NotificationEntryModel.process_after <= now)
+            NotificationEntryModel.scheduled_for.is_(None)
+            | (NotificationEntryModel.scheduled_for <= now)
         ),
     )
     if channel:
@@ -573,7 +573,7 @@ def retry_notification(session: Session, notification_id: str) -> NotificationEn
         return _to_entry(notif)
 
     notif.status = NotificationStatus.PENDING.value
-    notif.process_after = None
+    notif.scheduled_for = None
     notif.error = ""
     notif.attempts = 0
     session.flush()

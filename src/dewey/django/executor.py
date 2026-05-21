@@ -32,7 +32,7 @@ def create_task(
     queue: str = "default",
     priority: int = 0,
     max_attempts: int = 5,
-    process_after: datetime | None = None,
+    scheduled_for: datetime | None = None,
     idempotency_key: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> TaskEntryDC:
@@ -51,7 +51,7 @@ def create_task(
         queue=queue,
         priority=priority,
         max_attempts=max_attempts,
-        process_after=process_after,
+        scheduled_for=scheduled_for,
         idempotency_key=idempotency_key,
     )
 
@@ -108,9 +108,9 @@ def process_task(
             logger.info("Task not pending id=%s status=%s", task_id, task.status)
             return False
 
-        # Respect process_after scheduling
-        if task.process_after and task.process_after > now:
-            logger.info("Task not ready id=%s process_after=%s", task_id, task.process_after)
+        # Respect scheduled_for scheduling
+        if task.scheduled_for and task.scheduled_for > now:
+            logger.info("Task not ready id=%s scheduled_for=%s", task_id, task.scheduled_for)
             return False
 
         # Validate state machine
@@ -174,7 +174,7 @@ def process_task(
                     )
                 else:
                     task.status = TaskStatus.FAILED.value
-                    task.process_after = failure_now + (backoff or default_task_backoff)(attempts)
+                    task.scheduled_for = failure_now + (backoff or default_task_backoff)(attempts)
                     logger.warning(
                         "Task failed id=%s type=%s attempts=%d/%d error=%s",
                         task_id,
@@ -184,7 +184,7 @@ def process_task(
                         exc,
                     )
 
-                task.save(update_fields=["status", "error", "process_after", "updated_at"])
+                task.save(update_fields=["status", "error", "scheduled_for", "updated_at"])
 
             return False
 

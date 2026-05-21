@@ -27,11 +27,11 @@ def clean_db():
 
 @pytest.mark.django_db(transaction=True)
 class TestSweepFailed:
-    def test_re_enqueues_failed_tasks_past_process_after(self):
+    def test_re_enqueues_failed_tasks_past_scheduled_for(self):
         task = create_task(task_type="test.task")
         TaskEntry.objects.filter(id=task.id).update(
             status=TaskStatus.FAILED.value,
-            process_after=timezone.now() - timedelta(minutes=5),
+            scheduled_for=timezone.now() - timedelta(minutes=5),
             attempts=1,
         )
 
@@ -45,7 +45,7 @@ class TestSweepFailed:
         task = create_task(task_type="test.task")
         TaskEntry.objects.filter(id=task.id).update(
             status=TaskStatus.FAILED.value,
-            process_after=timezone.now() + timedelta(hours=1),
+            scheduled_for=timezone.now() + timedelta(hours=1),
             attempts=1,
         )
 
@@ -59,7 +59,7 @@ class TestSweepFailed:
         task = create_task(task_type="test.task", max_attempts=1)
         TaskEntry.objects.filter(id=task.id).update(
             status=TaskStatus.FAILED.value,
-            process_after=timezone.now() - timedelta(minutes=5),
+            scheduled_for=timezone.now() - timedelta(minutes=5),
             attempts=1,
         )
 
@@ -123,7 +123,7 @@ class TestSweepCombined:
 
         TaskEntry.objects.filter(id=failed.id).update(
             status=TaskStatus.FAILED.value,
-            process_after=timezone.now() - timedelta(minutes=5),
+            scheduled_for=timezone.now() - timedelta(minutes=5),
             attempts=1,
         )
         TaskEntry.objects.filter(id=stuck.id).update(

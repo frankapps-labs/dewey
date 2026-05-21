@@ -28,7 +28,7 @@ def _to_dataclass(row: TaskEntryModel) -> TaskEntry:
         error=row.error,
         created_at=row.created_at,
         updated_at=row.updated_at,
-        process_after=row.process_after,
+        scheduled_for=row.scheduled_for,
         started_at=row.started_at,
         completed_at=row.completed_at,
         idempotency_key=row.idempotency_key,
@@ -176,7 +176,7 @@ async def retry_task_async(session: AsyncSession, task_id: str) -> TaskEntry | N
         return _to_dataclass(task)
 
     task.status = TaskStatus.PENDING.value
-    task.process_after = None
+    task.scheduled_for = None
     task.error = ""
     task.attempts = 0
     await session.flush()
@@ -212,7 +212,7 @@ async def bulk_retry_async(
         stmt = stmt.where(TaskEntryModel.task_type == task_type)
     stmt = stmt.values(
         status=TaskStatus.PENDING.value,
-        process_after=None,
+        scheduled_for=None,
         error="",
         attempts=0,
     )

@@ -23,7 +23,7 @@ def sweep_failed(
     limit: int = 100,
 ) -> list[str]:
     """
-    Find FAILED tasks ready for retry (process_after has passed).
+    Find FAILED tasks ready for retry (scheduled_for has passed).
     Resets them to PENDING so the broker can pick them up.
 
     Returns list of task IDs that were re-enqueued.
@@ -34,9 +34,9 @@ def sweep_failed(
         select(TaskEntryModel.id)
         .where(
             TaskEntryModel.status == TaskStatus.FAILED.value,
-            TaskEntryModel.process_after <= now,
+            TaskEntryModel.scheduled_for <= now,
         )
-        .order_by(TaskEntryModel.process_after)
+        .order_by(TaskEntryModel.scheduled_for)
         .limit(limit)
     )
     task_ids = list(session.execute(stmt).scalars().all())

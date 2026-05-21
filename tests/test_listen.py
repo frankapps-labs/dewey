@@ -56,7 +56,7 @@ async def test_create_notification_async_notifies_on_commit(async_engine, async_
 async def test_retry_task_async_notifies_on_commit(async_engine, async_session):
     task = await create_task_async(async_session, task_type="scan", payload={})
     task.status = TaskStatus.FAILED.value
-    task.process_after = datetime.now(UTC) - timedelta(seconds=1)
+    task.scheduled_for = datetime.now(UTC) - timedelta(seconds=1)
     await async_session.commit()
 
     async with AsyncPostgresWorkListener(async_engine) as listener:
@@ -74,7 +74,7 @@ async def test_retry_task_async_notifies_on_commit(async_engine, async_session):
 async def test_sweep_failed_async_notifies_on_commit(async_engine, async_session):
     task = await create_task_async(async_session, task_type="scan", payload={})
     task.status = TaskStatus.FAILED.value
-    task.process_after = datetime.now(UTC) - timedelta(seconds=1)
+    task.scheduled_for = datetime.now(UTC) - timedelta(seconds=1)
     await async_session.commit()
 
     async with AsyncPostgresWorkListener(async_engine) as listener:

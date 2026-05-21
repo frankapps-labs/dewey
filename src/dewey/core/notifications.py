@@ -133,7 +133,7 @@ class NotificationEntry:
     error: str
     created_at: datetime
     updated_at: datetime
-    process_after: datetime | None = None
+    scheduled_for: datetime | None = None
     sent_at: datetime | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 

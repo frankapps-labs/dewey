@@ -70,7 +70,7 @@ class TaskEntryModel(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
     )
-    process_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -87,8 +87,8 @@ class TaskEntryModel(Base):
         # Partial index: sweep picks up PENDING tasks ready to process
         # Only indexes rows where status='pending' — tiny index, fast scan
         Index(
-            "ix_task_entries_pending_process_after",
-            "process_after",
+            "ix_task_entries_pending_scheduled_for",
+            "scheduled_for",
             postgresql_where=(status == TaskStatus.PENDING.value),
         ),
         # Partial index: sweep finds stuck PROCESSING tasks
@@ -100,8 +100,8 @@ class TaskEntryModel(Base):
         ),
         # Partial index: failed tasks eligible for retry
         Index(
-            "ix_task_entries_failed_process_after",
-            "process_after",
+            "ix_task_entries_failed_scheduled_for",
+            "scheduled_for",
             postgresql_where=(status == TaskStatus.FAILED.value),
         ),
         # Composite: recent tasks by type (dashboard queries)
