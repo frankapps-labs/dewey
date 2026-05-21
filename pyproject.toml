@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dewey"
-version = "0.2.0"
+version = "0.3.0"
 description = "Dewey — Guaranteed delivery engine for Python. Postgres-backed task delivery with multi-channel notifications."
 readme = "README.md"
 requires-python = ">=3.11"

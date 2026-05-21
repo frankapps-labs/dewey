@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - Unreleased
+
+### Changed
+- Renamed the scheduling column and Python attribute `process_after` → `scheduled_for`
+  across SQLAlchemy models, Django models, dataclasses (`TaskEntry`,
+  `NotificationEntry`), executor / sweep / query kwargs, and partial indexes
+  (`ix_task_entries_pending_scheduled_for`, `ix_task_entries_failed_scheduled_for`,
+  `ix_notif_pending_scheduled_for`, `ix_notif_failed_scheduled_for`). Pre-release
+  setups using `Base.metadata.create_all` or fresh `makemigrations` are unaffected;
+  the rename predates any tagged release.
+
+### Added
+- `dewey.adapters.DispatcherAdapter` protocol (`@runtime_checkable`) for the
+  upcoming Dewey-driven dispatch model: `register(process_fn)` +
+  `dispatch(task_id)`. Existing Huey/Celery adapters still expose the legacy
+  `setup` / `enqueue` API and will gain conformance in a follow-up.
+- Contract tests for `DispatcherAdapter`: runtime `isinstance` check, negative
+  cases for partial conformers, and `inspect.signature` locks on both methods.
+- Real-Postgres multi-process concurrency harness
+  (`tests/_helpers/concurrency.py`) exercising `FOR UPDATE SKIP LOCKED` with
+  uuid-suffixed tables, queue-drain-before-join, and child-side tracebacks
+  surfaced into the parent.
+
 ## [0.2.0] - 2026-04-23
 
 ### Added
