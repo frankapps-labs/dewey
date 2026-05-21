@@ -60,7 +60,30 @@ with Session(engine) as session:
         adapter.enqueue(task_id)
 ```
 
-### 5. Query the ledger
+### 5. Schedule a task for later
+
+Pass `scheduled_for` (a `datetime`) to defer a task. The sweep and
+`process_task` both honor it — a task whose `scheduled_for` is in the
+future stays `PENDING` and is not picked up:
+
+```python
+from datetime import datetime, timedelta, UTC
+from dewey.sqlalchemy.executor import create_task
+
+with Session(engine) as session:
+    task = create_task(
+        session,
+        task_type="reminder.send",
+        payload={"user_id": "u-42"},
+        scheduled_for=datetime.now(UTC) + timedelta(hours=1),
+    )
+    session.commit()
+```
+
+The same parameter is available on `create_task_async` and on the
+Django `create_task` (no session arg).
+
+### 6. Query the ledger
 
 ```python
 from dewey.sqlalchemy.queries import (

@@ -50,6 +50,8 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 ## Phase 4 — Django production readiness
 
 - [ ] Add initial Django migrations for task and notification models.
+      (Deferred until the first tagged release — pre-release setups use
+      `Base.metadata.create_all` / `makemigrations` against a fresh DB.)
 - [ ] Verify `python manage.py migrate` in a minimal Django app.
 - [ ] Smoke-test `dewey[django]` from built wheel.
 - [ ] Defer Django admin and management commands unless needed before 1.0.

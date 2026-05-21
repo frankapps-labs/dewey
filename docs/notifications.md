@@ -102,6 +102,29 @@ for notif in notifications:
     send_notification(notif.id, channel)
 ```
 
+### Scheduling a notification for later
+
+Like tasks, notifications accept a `scheduled_for` datetime. The sender and
+the sweep both refuse to deliver a notification whose `scheduled_for` is in
+the future, leaving it `PENDING` until the time arrives:
+
+```python
+from datetime import datetime, timedelta, UTC
+from dewey.sqlalchemy.notifications import create_notification
+
+with Session(engine) as session:
+    notif = create_notification(
+        session,
+        event_type="order.reminder",
+        channel="email",
+        recipient="buyer@example.com",
+        scheduled_for=datetime.now(UTC) + timedelta(days=1),
+    )
+    session.commit()
+```
+
+The same parameter is available on the async and Django variants.
+
 ### Per-Attempt Tracking
 
 Every delivery attempt is logged with status, error, and response data:
