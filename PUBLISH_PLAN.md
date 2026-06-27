@@ -38,16 +38,84 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 - [x] CI commands use uv consistently.
 - [x] CI runs lint, format check, typecheck, tests, build.
 
-## Phase 3 — Local integration infra
+## Phase 3 — First-release architecture: dispatcher
 
-- [x] Remove the repo-local FastAPI example to keep the published package lean; future integration docs/tests should live outside the package tree or as installed-wheel smoke tests.
-- [ ] Add `docker-compose.yml` at repo root with Postgres and Redis for full test matrix.
-- [ ] Add Huey worker/example path for integration testing.
-- [ ] Add Celery worker/beat placeholders or optional profile.
+Dewey's first public release is now shaped around Dewey-owned dispatch:
+Postgres remains the durable control plane and broker integrations become
+worker-pool transports.
+
+- [x] Introduce the `DispatcherAdapter` protocol (`register(process_fn)` +
+      `dispatch(task_id)`) and contract tests.
+- [ ] Make existing Huey and Celery adapters conform to `DispatcherAdapter`.
+- [ ] Add the Dewey dispatcher loop: claim ready task rows, transition through
+      dispatch-visible state, call `adapter.dispatch(task_id)`, and recover
+      abandoned dispatch/processing rows.
+- [ ] Ensure dispatch wake-up works with the existing LISTEN/NOTIFY helpers,
+      while polling remains a safe fallback.
+- [ ] Add sync and async tests for claim/dispatch/reclaim behavior.
+- [ ] Document the broker relationship: Redis/RabbitMQ/etc. are accelerators /
+      worker-pool transports, not the durable source of truth.
+
+## Phase 4 — First-release architecture: TaskPolicy chain
+
+Task behavior should be declared in a Dewey policy registry, not scattered
+across broker decorators. Producers create task rows by type; handlers stay
+small, bounded, and dumb.
+
+- [ ] Add `TaskPolicy`, backoff policy types, policy registry, and resolver.
+- [ ] Add `@dewey.task(...)` as policy registration sugar.
+- [ ] Add producer API: `create_task(task_type, args=..., kwargs=..., ...)`.
+- [ ] Add typed handler outcomes/exceptions, including `RetryAfter(...)`.
+- [ ] Implement policy precedence: code defaults, project config, row-specific
+      scheduling/priority where appropriate.
+- [ ] Add Tier-1 lifecycle hooks needed for task state transitions and latency
+      payloads.
+- [ ] Update public docs around task creation, handler shape, retry policy,
+      scheduling, and broker migration.
+
+## Phase 5 — First-release safety checks
+
+First release should include policy-level safety checks, but not the full
+runtime/source-lint surface. The goal is to make unsafe task shape reviewable
+without blocking launch on dashboards or static analysis.
+
+- [ ] Add TaskPolicy safety metadata: `expected_runtime_s`,
+      `stuck_threshold_s`, `batch_size`, `batch_size_required`, `resumable`,
+      `idempotency_required`, `idempotency_key`, `concurrency_key`,
+      `concurrency_limit`, `drain_mode`, and `safety_notes`.
+- [ ] Add pure validator API:
+      `validate_task_policy(policy, runtime_config) -> list[SafetyFinding]`.
+- [ ] Add CLI: `dewey check` with human-readable output.
+- [ ] Add CI-friendly output: `dewey check --format json`.
+- [ ] Default behavior: errors exit non-zero; warnings exit non-zero only with
+      `--strict`.
+- [ ] Add `docs/task-safety.md` with safe/unsafe examples and the boundary
+      between Dewey guarantees and handler responsibilities.
+- [ ] Defer runtime safety scoring, source/AST linting, dashboard/admin UX, and
+      richer partition/fairness primitives until after real usage.
+
+## Phase 6 — Local integration infra and installed-wheel smoke
+
+Keep the published package lean. Integration examples/tests should validate the
+installed package without shipping a full example app inside the distribution.
+
+- [x] Remove the repo-local FastAPI example to keep the published package lean.
+- [ ] Add `docker-compose.yml` at repo root with Postgres and Redis for full
+      test matrix.
 - [ ] Add Make targets: `up`, `down`, `test-db`, `test-integration`.
 - [ ] Document local setup and env vars.
+- [ ] Build wheel in CI.
+- [ ] Install wheel into a fresh env.
+- [ ] Smoke-import core modules and extras modules.
+- [ ] Add installed-wheel Postgres task create/dispatch/process smoke test.
+- [ ] Add optional Huey/Celery transport smoke tests once adapters conform to
+      `DispatcherAdapter`.
 
-## Phase 4 — Django production readiness
+## Phase 7 — Django production readiness
+
+Django remains supported, but Django-specific operational polish does not block
+the first public pre-release unless a Django consumer becomes the first
+integration target.
 
 - [ ] Add initial Django migrations for task and notification models.
       (Deferred until the first tagged release — pre-release setups use
@@ -56,20 +124,17 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 - [ ] Smoke-test `dewey[django]` from built wheel.
 - [ ] Defer Django admin and management commands unless needed before 1.0.
 
-## Phase 5 — Changelog/version polish
+## Phase 8 — Changelog/version/release polish
 
-- [ ] Update changelog for current 0.2.0 work: async SQLAlchemy, JSONB→JSON, Django, Celery, notifications, pluggable backoff, trace context, current test count/coverage.
-- [ ] Decide next development version after cleanup (`0.2.x`, `0.3.0-dev`, or leave `0.2.0` until tag).
-- [ ] Define 1.0 release gate in README/changelog notes.
+- [x] Create the `[0.3.0] - Unreleased` changelog section for the dispatcher
+      architecture branch.
+- [ ] Keep appending dispatcher, TaskPolicy, and safety-check changes to the
+      `[0.3.0] - Unreleased` block.
+- [ ] Date-stamp changelog at tag time.
+- [ ] Define 1.0 release gate in README/changelog notes: at least one real
+      consumer must validate the public API before `1.0`.
 
-## Phase 6 — Automated smoke tests
-
-- [ ] Build wheel in CI.
-- [ ] Install wheel into a fresh env.
-- [ ] Smoke-import core modules and extras modules.
-- [ ] Optional installed-wheel Postgres task create/process smoke test.
-
-## Phase 7 — Free OSS tooling/security
+## Phase 9 — Free OSS tooling/security
 
 - [ ] Coveralls coverage upload.
 - [ ] GitHub CodeQL for Python.
@@ -148,10 +213,13 @@ sustained insert pressure.
       `correlation-context`. Dewey then keeps only the metadata-round-trip glue.
 - Defer until: 2nd consumer materialises.
 
-## Phase 8 — First real consumer
+## Phase 10 — First real consumer
 
-- [ ] Wire Dewey into a real async SQLAlchemy consumer.
+- [ ] Wire Dewey into a real async SQLAlchemy consumer before public release.
 - [ ] Keep the task queue/broker as transport and Dewey/Postgres as guarantee.
+- [ ] Prefer shadow-mode or a non-critical task type first, then cut over one
+      production task type at a time.
 - [ ] Feed integration rough edges back into Dewey before public release.
-- [ ] Tag/publish `0.2.x` once the first real integration is clean.
+- [ ] Tag/publish `0.3.0` once the dispatcher, TaskPolicy, safety checks, and
+      first real integration are clean.
 - [ ] Promote to `1.0` only after real usage proves the API stable.
