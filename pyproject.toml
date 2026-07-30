@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "dewey"
 version = "0.4.0"
-description = "Dewey — Guaranteed delivery engine for Python. Postgres-backed task delivery with multi-channel notifications."
+description = "Guaranteed delivery engine for Python: Postgres is the scheduler and backlog, your broker is just a worker pool."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -57,7 +57,10 @@ dev = [
     "sqlalchemy[asyncio]>=2.0",
     "asyncpg>=0.30.0",
     "aiosqlite>=0.21.0",
-    "Django>=4.2",
+    # Patched Django per interpreter: 6.0 needs Python 3.12+, and Dewey still
+    # supports 3.11. Floors are set to releases without open advisories.
+    "Django>=5.2.16; python_version < '3.12'",
+    "Django>=6.0.7; python_version >= '3.12'",
     "psycopg2-binary>=2.9",
     "huey>=2.5",
 ]

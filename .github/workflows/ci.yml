@@ -21,6 +21,7 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
         django-version: [""]
+        huey-version: [""]
         include:
           # The oldest and newest supported Django, pinned explicitly. Without this
           # the matrix only ever tests whatever the resolver picks.
@@ -28,6 +29,9 @@ jobs:
             django-version: "4.2"
           - python-version: "3.12"
             django-version: "5.1"
+          # The oldest supported Huey. pyproject says >=2.5, so prove it.
+          - python-version: "3.12"
+            huey-version: "2.5"
 
     services:
       postgres:
@@ -71,10 +75,15 @@ jobs:
         if: matrix.django-version != ''
         run: uv pip install "Django~=${{ matrix.django-version }}.0"
 
+      - name: Pin Huey ${{ matrix.huey-version }}
+        if: matrix.huey-version != ''
+        run: uv pip install "huey~=${{ matrix.huey-version }}.0"
+
       - name: Report the versions actually under test
         run: |
           uv run python -c "import django, sys; print('python', sys.version)"
           uv run python -c "import django; print('django', django.get_version())"
+          uv run python -c "import huey; print('huey', huey.__version__)"
 
       - name: Run linting
         run: uv run ruff check src/ tests/
