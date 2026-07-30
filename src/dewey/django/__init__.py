@@ -1,59 +1,221 @@
-"""Django adapter for dewey — models, executor, sweep, queries, notifications."""
+"""Django adapter for dewey — models, executor, sweep, queries, notifications.
+
+Everything here is imported lazily. Dewey's Django models must not be imported
+before Django's app registry is ready, and a consumer that only produces tasks
+should not pay for the notification layer.
+"""
+
+from importlib import import_module
+from typing import TYPE_CHECKING, Any
+
+_LAZY: dict[str, str] = {
+    # Executor
+    "create_task": "dewey.django.executor",
+    "process_task": "dewey.django.executor",
+    # Sweep
+    "sweep": "dewey.django.sweep",
+    "sweep_failed": "dewey.django.sweep",
+    "sweep_stuck": "dewey.django.sweep",
+    "sweep_dispatching": "dewey.django.sweep",
+    # Queries and actions
+    "get_stats": "dewey.django.queries",
+    "get_pending": "dewey.django.queries",
+    "get_dispatching": "dewey.django.queries",
+    "get_processing": "dewey.django.queries",
+    "get_stuck": "dewey.django.queries",
+    "get_failed": "dewey.django.queries",
+    "get_dead": "dewey.django.queries",
+    "get_task": "dewey.django.queries",
+    "get_recent": "dewey.django.queries",
+    "retry_task": "dewey.django.queries",
+    "bulk_retry": "dewey.django.queries",
+    "kill_task": "dewey.django.queries",
+    "purge_completed": "dewey.django.queries",
+    # Notifications (experimental — see docs/notifications.md)
+    "create_notification": "dewey.django.notifications",
+    "create_notifications_for_event": "dewey.django.notifications",
+    "send_notification": "dewey.django.notifications",
+    "process_notification": "dewey.django.notifications",
+    "sweep_notifications": "dewey.django.notifications",
+    "sweep_failed_notifications": "dewey.django.notifications",
+    "sweep_stuck_notifications": "dewey.django.notifications",
+    "get_notification": "dewey.django.notifications",
+    "get_notification_attempts": "dewey.django.notifications",
+    "get_notification_stats": "dewey.django.notifications",
+    "get_notifications_for_task": "dewey.django.notifications",
+    "get_pending_notifications": "dewey.django.notifications",
+    "get_failed_notifications": "dewey.django.notifications",
+    "get_dead_notifications": "dewey.django.notifications",
+    "retry_notification": "dewey.django.notifications",
+    "kill_notification": "dewey.django.notifications",
+    "purge_sent_notifications": "dewey.django.notifications",
+}
+
+if TYPE_CHECKING:  # re-exported for type checkers and IDE completion
+    from dewey.django.executor import (
+        create_task as create_task,
+    )
+    from dewey.django.executor import (
+        process_task as process_task,
+    )
+    from dewey.django.notifications import (
+        create_notification as create_notification,
+    )
+    from dewey.django.notifications import (
+        create_notifications_for_event as create_notifications_for_event,
+    )
+    from dewey.django.notifications import (
+        get_dead_notifications as get_dead_notifications,
+    )
+    from dewey.django.notifications import (
+        get_failed_notifications as get_failed_notifications,
+    )
+    from dewey.django.notifications import (
+        get_notification as get_notification,
+    )
+    from dewey.django.notifications import (
+        get_notification_attempts as get_notification_attempts,
+    )
+    from dewey.django.notifications import (
+        get_notification_stats as get_notification_stats,
+    )
+    from dewey.django.notifications import (
+        get_notifications_for_task as get_notifications_for_task,
+    )
+    from dewey.django.notifications import (
+        get_pending_notifications as get_pending_notifications,
+    )
+    from dewey.django.notifications import (
+        kill_notification as kill_notification,
+    )
+    from dewey.django.notifications import (
+        process_notification as process_notification,
+    )
+    from dewey.django.notifications import (
+        purge_sent_notifications as purge_sent_notifications,
+    )
+    from dewey.django.notifications import (
+        retry_notification as retry_notification,
+    )
+    from dewey.django.notifications import (
+        send_notification as send_notification,
+    )
+    from dewey.django.notifications import (
+        sweep_failed_notifications as sweep_failed_notifications,
+    )
+    from dewey.django.notifications import (
+        sweep_notifications as sweep_notifications,
+    )
+    from dewey.django.notifications import (
+        sweep_stuck_notifications as sweep_stuck_notifications,
+    )
+    from dewey.django.queries import (
+        bulk_retry as bulk_retry,
+    )
+    from dewey.django.queries import (
+        get_dead as get_dead,
+    )
+    from dewey.django.queries import (
+        get_dispatching as get_dispatching,
+    )
+    from dewey.django.queries import (
+        get_failed as get_failed,
+    )
+    from dewey.django.queries import (
+        get_pending as get_pending,
+    )
+    from dewey.django.queries import (
+        get_processing as get_processing,
+    )
+    from dewey.django.queries import (
+        get_recent as get_recent,
+    )
+    from dewey.django.queries import (
+        get_stats as get_stats,
+    )
+    from dewey.django.queries import (
+        get_stuck as get_stuck,
+    )
+    from dewey.django.queries import (
+        get_task as get_task,
+    )
+    from dewey.django.queries import (
+        kill_task as kill_task,
+    )
+    from dewey.django.queries import (
+        purge_completed as purge_completed,
+    )
+    from dewey.django.queries import (
+        retry_task as retry_task,
+    )
+    from dewey.django.sweep import (
+        sweep as sweep,
+    )
+    from dewey.django.sweep import (
+        sweep_dispatching as sweep_dispatching,
+    )
+    from dewey.django.sweep import (
+        sweep_failed as sweep_failed,
+    )
+    from dewey.django.sweep import (
+        sweep_stuck as sweep_stuck,
+    )
+
+__all__ = [
+    "bulk_retry",
+    "create_notification",
+    "create_notifications_for_event",
+    "create_task",
+    "get_dead",
+    "get_dead_notifications",
+    "get_dispatching",
+    "get_failed",
+    "get_failed_notifications",
+    "get_notification",
+    "get_notification_attempts",
+    "get_notification_stats",
+    "get_notifications_for_task",
+    "get_pending",
+    "get_pending_notifications",
+    "get_processing",
+    "get_recent",
+    "get_stats",
+    "get_stuck",
+    "get_task",
+    "kill_notification",
+    "kill_task",
+    "process_notification",
+    "process_task",
+    "purge_completed",
+    "purge_sent_notifications",
+    "retry_notification",
+    "retry_task",
+    "send_notification",
+    "sweep",
+    "sweep_dispatching",
+    "sweep_failed",
+    "sweep_failed_notifications",
+    "sweep_notifications",
+    "sweep_stuck",
+    "sweep_stuck_notifications",
+]
 
 
-def __getattr__(name: str):
-    """Lazy imports — avoid importing models before Django app registry is ready."""
-    _executor_names = {"create_task", "process_task"}
-    _sweep_names = {"sweep", "sweep_failed", "sweep_stuck"}
-    _query_names = {
-        "get_stats",
-        "get_pending",
-        "get_processing",
-        "get_stuck",
-        "get_failed",
-        "get_dead",
-        "get_task",
-        "get_recent",
-        "retry_task",
-        "bulk_retry",
-        "kill_task",
-        "purge_completed",
-    }
-    _notification_names = {
-        "create_notification",
-        "create_notifications_for_event",
-        "send_notification",
-        "process_notification",
-        "sweep_notifications",
-        "sweep_failed_notifications",
-        "sweep_stuck_notifications",
-        "get_notification",
-        "get_notification_attempts",
-        "get_notification_stats",
-        "get_notifications_for_task",
-        "get_pending_notifications",
-        "get_failed_notifications",
-        "get_dead_notifications",
-        "retry_notification",
-        "kill_notification",
-        "purge_sent_notifications",
-    }
+def __getattr__(name: str) -> Any:
+    """Resolve a public name to its implementation, once.
 
-    if name in _executor_names:
-        from dewey.django.executor import create_task, process_task
+    The resolved object is cached in this module's namespace, which also settles
+    an ambiguity: ``dewey.django.sweep`` is both a submodule and a function, and
+    without the cache the name resolves to the function on first access and to the
+    submodule afterwards.
+    """
+    module_path = _LAZY.get(name)
+    if module_path is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module_path), name)
+    globals()[name] = value
+    return value
 
-        return locals()[name]
-    if name in _sweep_names:
-        from dewey.django.sweep import sweep, sweep_failed, sweep_stuck
 
-        return locals()[name]
-    if name in _query_names:
-        from dewey.django import queries
-
-        return getattr(queries, name)
-    if name in _notification_names:
-        from dewey.django import notifications
-
-        return getattr(notifications, name)
-
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+def __dir__() -> list[str]:
+    return sorted({*globals(), *_LAZY})

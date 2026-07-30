@@ -23,7 +23,9 @@ def get_stats() -> dict[str, int]:
     """
     Counts by status — the health overview.
 
-    Returns: {"pending": 12, "processing": 3, "completed": 4891, "failed": 2, "dead": 1}
+    Returns one count per status, including zeros:
+    ``{"pending": 12, "dispatching": 1, "processing": 3, "completed": 4891,
+    "failed": 2, "dead": 1}``
     """
     rows = TaskEntry.objects.values("status").annotate(count=Count("id")).order_by()
     stats = {s.value: 0 for s in TaskStatus}
@@ -51,6 +53,14 @@ def get_processing(limit: int = 50) -> list[TaskEntryDC]:
     qs = TaskEntry.objects.filter(
         status=TaskStatus.PROCESSING.value,
     ).order_by("started_at")
+    return _to_list(qs[:limit])
+
+
+def get_dispatching(limit: int = 50) -> list[TaskEntryDC]:
+    """Tasks claimed for dispatch but not yet started by a worker."""
+    qs = TaskEntry.objects.filter(
+        status=TaskStatus.DISPATCHING.value,
+    ).order_by("dispatching_at")
     return _to_list(qs[:limit])
 
 

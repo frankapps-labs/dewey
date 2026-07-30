@@ -2,10 +2,12 @@
 
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import update
+
 from dewey.core.states import TaskStatus
 from dewey.sqlalchemy.executor import create_task
 from dewey.sqlalchemy.models import TaskEntryModel
-from dewey.sqlalchemy.sweep import sweep, sweep_failed, sweep_stuck
+from dewey.sqlalchemy.sweep import sweep, sweep_dispatching, sweep_failed, sweep_stuck
 
 
 class TestSweepFailed:
@@ -116,3 +118,54 @@ class TestSweepCombined:
         result = sweep(session)
         assert failed.id in result["failed"]
         assert stuck.id in result["stuck"]
+
+
+class TestSweepDispatching:
+    """Reclaim rows a dispatcher claimed but no worker ever started."""
+
+    def _dispatching(self, session, *, age_seconds: int, attempts: int = 0, max_attempts: int = 5):
+        task = create_task(session, task_type="test.dispatch", max_attempts=max_attempts)
+        session.execute(
+            update(TaskEntryModel)
+            .where(TaskEntryModel.id == task.id)
+            .values(
+                status=TaskStatus.DISPATCHING.value,
+                dispatching_at=datetime.now(UTC) - timedelta(seconds=age_seconds),
+                attempts=attempts,
+            )
+        )
+        session.commit()
+        return task.id
+
+    def test_reclaims_a_row_past_the_dispatch_timeout(self, session):
+        task_id = self._dispatching(session, age_seconds=600)
+
+        reclaimed = sweep_dispatching(session, dispatch_timeout_seconds=300)
+        session.commit()
+
+        assert reclaimed == [task_id]
+        row = session.get(TaskEntryModel, task_id)
+        assert row.status == TaskStatus.PENDING.value
+        assert row.dispatching_at is None
+
+    def test_leaves_a_recent_claim_alone(self, session):
+        """A healthy broker backlog must not be reclaimed and dispatched twice."""
+        task_id = self._dispatching(session, age_seconds=10)
+
+        assert sweep_dispatching(session, dispatch_timeout_seconds=300) == []
+        assert session.get(TaskEntryModel, task_id).status == TaskStatus.DISPATCHING.value
+
+    def test_dead_letters_when_the_attempt_budget_is_spent(self, session):
+        task_id = self._dispatching(session, age_seconds=600, attempts=5, max_attempts=5)
+
+        assert sweep_dispatching(session, dispatch_timeout_seconds=300) == []
+        session.commit()
+        assert session.get(TaskEntryModel, task_id).status == TaskStatus.DEAD.value
+
+    def test_sweep_runs_the_dispatching_pass(self, session):
+        task_id = self._dispatching(session, age_seconds=600)
+
+        result = sweep(session, dispatch_timeout_seconds=300)
+        session.commit()
+
+        assert result["dispatching"] == [task_id]

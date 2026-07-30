@@ -30,6 +30,7 @@ def _to_dataclass(row: TaskEntryModel) -> TaskEntry:
         created_at=row.created_at,
         updated_at=row.updated_at,
         scheduled_for=row.scheduled_for,
+        dispatching_at=row.dispatching_at,
         started_at=row.started_at,
         completed_at=row.completed_at,
         idempotency_key=row.idempotency_key,
@@ -48,7 +49,9 @@ def get_stats(session: Session) -> dict[str, int]:
     """
     Counts by status — the health overview.
 
-    Returns: {"pending": 12, "processing": 3, "completed": 4891, "failed": 2, "dead": 1}
+    Returns one count per status, including zeros:
+    ``{"pending": 12, "dispatching": 1, "processing": 3, "completed": 4891,
+    "failed": 2, "dead": 1}``
     """
     stmt = select(TaskEntryModel.status, func.count()).group_by(TaskEntryModel.status)
     results = session.execute(stmt).all()
@@ -81,6 +84,17 @@ def get_processing(session: Session, limit: int = 50) -> list[TaskEntry]:
         select(TaskEntryModel)
         .where(TaskEntryModel.status == TaskStatus.PROCESSING.value)
         .order_by(TaskEntryModel.started_at)
+        .limit(limit)
+    )
+    return _to_list(session.execute(stmt).scalars().all())
+
+
+def get_dispatching(session: Session, limit: int = 50) -> list[TaskEntry]:
+    """Tasks claimed for dispatch but not yet started by a worker."""
+    stmt = (
+        select(TaskEntryModel)
+        .where(TaskEntryModel.status == TaskStatus.DISPATCHING.value)
+        .order_by(TaskEntryModel.dispatching_at)
         .limit(limit)
     )
     return _to_list(session.execute(stmt).scalars().all())

@@ -24,6 +24,7 @@ class TaskEntry(models.Model):
 
     class Status(models.TextChoices):
         PENDING = TaskStatus.PENDING.value, "Pending"
+        DISPATCHING = TaskStatus.DISPATCHING.value, "Dispatching"
         PROCESSING = TaskStatus.PROCESSING.value, "Processing"
         COMPLETED = TaskStatus.COMPLETED.value, "Completed"
         FAILED = TaskStatus.FAILED.value, "Failed"
@@ -58,6 +59,7 @@ class TaskEntry(models.Model):
     created_at = models.DateTimeField(default=lambda: datetime.now(UTC), db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
     scheduled_for = models.DateTimeField(null=True, blank=True)
+    dispatching_at = models.DateTimeField(null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
 
@@ -78,6 +80,12 @@ class TaskEntry(models.Model):
                 fields=["scheduled_for"],
                 name="ix_task_entries_pending_pa",
                 condition=models.Q(status="pending"),
+            ),
+            # Partial index: rows a dispatcher claimed but no worker took
+            models.Index(
+                fields=["dispatching_at"],
+                name="ix_task_entries_dispatching",
+                condition=models.Q(status="dispatching"),
             ),
             # Partial index: stuck processing tasks
             models.Index(
@@ -119,6 +127,7 @@ class TaskEntry(models.Model):
             created_at=self.created_at,
             updated_at=self.updated_at,
             scheduled_for=self.scheduled_for,
+            dispatching_at=self.dispatching_at,
             started_at=self.started_at,
             completed_at=self.completed_at,
             idempotency_key=self.idempotency_key,

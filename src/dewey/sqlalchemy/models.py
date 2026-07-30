@@ -74,6 +74,7 @@ class TaskEntryModel(Base):
         DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
     )
     scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    dispatching_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -94,6 +95,12 @@ class TaskEntryModel(Base):
             "ix_task_entries_pending_scheduled_for",
             "scheduled_for",
             postgresql_where=(status == TaskStatus.PENDING.value),
+        ),
+        # Partial index: sweep finds rows a dispatcher claimed but no worker took
+        Index(
+            "ix_task_entries_dispatching_at",
+            "dispatching_at",
+            postgresql_where=(status == TaskStatus.DISPATCHING.value),
         ),
         # Partial index: sweep finds stuck PROCESSING tasks
         # Only indexes rows where status='processing' — at most a handful at any time

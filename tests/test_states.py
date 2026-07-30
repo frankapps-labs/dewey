@@ -101,3 +101,39 @@ class TestRetryLogic:
 
     def test_should_not_die_under_max(self):
         assert should_die(attempts=4, max_attempts=5) is False
+
+
+class TestDispatchingState:
+    """DISPATCHING sits between a dispatcher's claim and a worker picking it up."""
+
+    def test_pending_can_be_claimed_for_dispatch(self):
+        assert TaskStatus.PENDING.can_transition_to(TaskStatus.DISPATCHING)
+
+    def test_pending_can_still_go_straight_to_processing(self):
+        """In-process execution has no broker in the path, so this stays legal."""
+        assert TaskStatus.PENDING.can_transition_to(TaskStatus.PROCESSING)
+
+    def test_dispatching_can_be_picked_up_by_a_worker(self):
+        assert TaskStatus.DISPATCHING.can_transition_to(TaskStatus.PROCESSING)
+
+    def test_dispatching_can_be_returned_to_pending(self):
+        """Dispatch failed, or the dispatch-timeout sweep reclaimed it."""
+        assert TaskStatus.DISPATCHING.can_transition_to(TaskStatus.PENDING)
+
+    def test_dispatching_can_be_killed(self):
+        assert TaskStatus.DISPATCHING.can_transition_to(TaskStatus.DEAD)
+
+    def test_dispatching_cannot_complete_without_processing(self):
+        assert not TaskStatus.DISPATCHING.can_transition_to(TaskStatus.COMPLETED)
+
+    def test_dispatching_is_not_terminal(self):
+        assert TaskStatus.DISPATCHING.is_terminal is False
+
+    def test_terminal_states_cannot_be_redispatched(self):
+        assert not TaskStatus.COMPLETED.can_transition_to(TaskStatus.DISPATCHING)
+        assert not TaskStatus.DEAD.can_transition_to(TaskStatus.DISPATCHING)
+
+    def test_failed_is_redispatched_through_pending(self):
+        """The sweep resets FAILED to PENDING; it never dispatches directly."""
+        assert not TaskStatus.FAILED.can_transition_to(TaskStatus.DISPATCHING)
+        assert TaskStatus.FAILED.can_transition_to(TaskStatus.PENDING)

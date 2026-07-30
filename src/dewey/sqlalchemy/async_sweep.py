@@ -15,6 +15,7 @@ from dewey.sqlalchemy.models import TaskEntryModel
 logger = logging.getLogger(__name__)
 
 DEFAULT_STUCK_THRESHOLD_MINUTES = 10
+DEFAULT_DISPATCH_TIMEOUT_SECONDS = 300
 
 
 async def sweep_failed_async(
@@ -140,18 +141,86 @@ async def sweep_stuck_async(
     return [task_id for task_id, _queue in retry_rows]
 
 
+async def sweep_dispatching_async(
+    session: AsyncSession,
+    dispatch_timeout_seconds: int = DEFAULT_DISPATCH_TIMEOUT_SECONDS,
+    limit: int = 100,
+) -> list[str]:
+    """
+    Find tasks a dispatcher claimed but no worker ever picked up, and return them
+    to PENDING. Async version of sweep_dispatching().
+    """
+    threshold = datetime.now(UTC) - timedelta(seconds=dispatch_timeout_seconds)
+
+    stmt = (
+        select(TaskEntryModel.id)
+        .where(
+            TaskEntryModel.status == TaskStatus.DISPATCHING.value,
+            TaskEntryModel.dispatching_at < threshold,
+        )
+        .order_by(TaskEntryModel.dispatching_at)
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    task_ids = list(result.scalars().all())
+
+    if not task_ids:
+        return []
+
+    retry_result = await session.execute(
+        update(TaskEntryModel)
+        .where(
+            TaskEntryModel.id.in_(task_ids),
+            TaskEntryModel.status == TaskStatus.DISPATCHING.value,
+            TaskEntryModel.attempts < TaskEntryModel.max_attempts,
+        )
+        .values(status=TaskStatus.PENDING.value, dispatching_at=None)
+        .returning(TaskEntryModel.id, TaskEntryModel.queue)
+    )
+    retry_rows = list(retry_result.all())
+    dead_result = await session.execute(
+        update(TaskEntryModel)
+        .where(
+            TaskEntryModel.id.in_(task_ids),
+            TaskEntryModel.status == TaskStatus.DISPATCHING.value,
+            TaskEntryModel.attempts >= TaskEntryModel.max_attempts,
+        )
+        .values(status=TaskStatus.DEAD.value, dispatching_at=None)
+        .returning(TaskEntryModel.id)
+    )
+    dead_ids = list(dead_result.scalars())
+    await session.flush()
+    for task_id, queue in retry_rows:
+        await notify_work_available_async(session, kind="task", entry_id=task_id, queue=queue)
+
+    if dead_ids:
+        logger.warning("Sweep dead-lettered %d exhausted dispatching tasks", len(dead_ids))
+    if retry_rows:
+        logger.warning(
+            "Sweep reclaimed %d dispatching tasks (timeout=%ds)",
+            len(retry_rows),
+            dispatch_timeout_seconds,
+        )
+    return [task_id for task_id, _queue in retry_rows]
+
+
 async def sweep_async(
     session: AsyncSession,
     stuck_threshold_minutes: int = DEFAULT_STUCK_THRESHOLD_MINUTES,
+    dispatch_timeout_seconds: int = DEFAULT_DISPATCH_TIMEOUT_SECONDS,
     limit: int = 100,
 ) -> dict[str, list[str]]:
     """
-    Run both sweeps. Returns dict with 'failed' and 'stuck' task ID lists.
-
-    Call this from a periodic task (e.g. every 5 minutes).
+    Run every recovery pass. Returns dict with 'failed', 'dispatching' and
+    'stuck' task ID lists.
     """
     return {
         "failed": await sweep_failed_async(session, limit=limit),
+        "dispatching": await sweep_dispatching_async(
+            session,
+            dispatch_timeout_seconds=dispatch_timeout_seconds,
+            limit=limit,
+        ),
         "stuck": await sweep_stuck_async(
             session,
             stuck_threshold_minutes=stuck_threshold_minutes,

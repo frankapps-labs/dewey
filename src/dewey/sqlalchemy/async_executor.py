@@ -24,6 +24,10 @@ from dewey.sqlalchemy.models import TaskEntryModel
 
 logger = logging.getLogger(__name__)
 
+# States a worker may claim from. PENDING covers in-process execution with no
+# broker in the path; DISPATCHING covers the normal dispatcher-driven flow.
+_CLAIMABLE = (TaskStatus.PENDING, TaskStatus.DISPATCHING)
+
 # Async handler: awaited as handler(*args, **kwargs) with the decoded task arguments.
 AsyncTaskHandler = Callable[..., Awaitable[Any]]
 
@@ -115,8 +119,12 @@ async def process_task_async(
         logger.info("Task already terminal id=%s status=%s", task_id, task.status)
         return False
 
-    if current_status != TaskStatus.PENDING:
-        logger.info("Task not pending id=%s status=%s", task_id, task.status)
+    # Claimable from PENDING (in-process execution) or DISPATCHING (a dispatcher
+    # already handed this ID to the transport). Anything else means another worker
+    # got there first, or an operator intervened — a duplicate delivery is a
+    # logged no-op, never an error.
+    if current_status not in _CLAIMABLE:
+        logger.info("Task not claimable id=%s status=%s", task_id, task.status)
         return False
 
     if task.scheduled_for and task.scheduled_for > now:
@@ -129,6 +137,7 @@ async def process_task_async(
 
     task.status = TaskStatus.PROCESSING.value
     task.started_at = now
+    task.dispatching_at = None
     task.attempts += 1
 
     # Cache values before commit (objects expire after commit)

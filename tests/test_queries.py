@@ -30,6 +30,7 @@ class TestGetStats:
         stats = get_stats(session)
         assert stats == {
             "pending": 0,
+            "dispatching": 0,
             "processing": 0,
             "completed": 0,
             "failed": 0,

@@ -24,6 +24,7 @@ from dewey.sqlalchemy.async_notifications import (
 from dewey.sqlalchemy.async_queries import (
     bulk_retry_async,
     get_dead_async,
+    get_dispatching_async,
     get_failed_async,
     get_pending_async,
     get_processing_async,
@@ -35,7 +36,12 @@ from dewey.sqlalchemy.async_queries import (
     purge_completed_async,
     retry_task_async,
 )
-from dewey.sqlalchemy.async_sweep import sweep_async, sweep_failed_async, sweep_stuck_async
+from dewey.sqlalchemy.async_sweep import (
+    sweep_async,
+    sweep_dispatching_async,
+    sweep_failed_async,
+    sweep_stuck_async,
+)
 from dewey.sqlalchemy.executor import create_task, process_task
 from dewey.sqlalchemy.listen import (
     DEFAULT_WORK_CHANNEL,
@@ -71,6 +77,7 @@ from dewey.sqlalchemy.notifications import (
 from dewey.sqlalchemy.queries import (
     bulk_retry,
     get_dead,
+    get_dispatching,
     get_failed,
     get_pending,
     get_processing,
@@ -82,7 +89,7 @@ from dewey.sqlalchemy.queries import (
     purge_completed,
     retry_task,
 )
-from dewey.sqlalchemy.sweep import sweep, sweep_failed, sweep_stuck
+from dewey.sqlalchemy.sweep import sweep, sweep_dispatching, sweep_failed, sweep_stuck
 
 __all__ = [
     # Models
@@ -103,9 +110,11 @@ __all__ = [
     "sweep",
     "sweep_failed",
     "sweep_stuck",
+    "sweep_dispatching",
     # Task queries & actions
     "get_stats",
     "get_pending",
+    "get_dispatching",
     "get_processing",
     "get_stuck",
     "get_failed",
@@ -142,9 +151,11 @@ __all__ = [
     "sweep_async",
     "sweep_failed_async",
     "sweep_stuck_async",
+    "sweep_dispatching_async",
     # Task queries & actions
     "get_stats_async",
     "get_pending_async",
+    "get_dispatching_async",
     "get_processing_async",
     "get_stuck_async",
     "get_failed_async",

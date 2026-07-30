@@ -132,4 +132,4 @@ async def test_sweep_combined(async_session):
 @pytest.mark.asyncio
 async def test_sweep_empty(async_session):
     result = await sweep_async(async_session)
-    assert result == {"failed": [], "stuck": []}
+    assert result == {"failed": [], "dispatching": [], "stuck": []}

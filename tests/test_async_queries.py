@@ -26,7 +26,14 @@ from dewey.sqlalchemy.models import TaskEntryModel
 @pytest.mark.asyncio
 async def test_get_stats_empty(async_session):
     stats = await get_stats_async(async_session)
-    assert stats == {"pending": 0, "processing": 0, "completed": 0, "failed": 0, "dead": 0}
+    assert stats == {
+        "pending": 0,
+        "dispatching": 0,
+        "processing": 0,
+        "completed": 0,
+        "failed": 0,
+        "dead": 0,
+    }
 
 
 @pytest.mark.asyncio

@@ -7,6 +7,10 @@ class TaskStatus(str, Enum):  # noqa: UP042 — keeping (str, Enum) intentional;
     """Task lifecycle states."""
 
     PENDING = "pending"
+    #: Claimed by a dispatcher and handed to the transport, but not yet picked up
+    #: by a worker. A row that sits here past the dispatch timeout is reclaimed by
+    #: the sweep — that is what makes a dispatcher crash survivable.
+    DISPATCHING = "dispatching"
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -30,7 +34,16 @@ class TaskStatus(str, Enum):  # noqa: UP042 — keeping (str, Enum) intentional;
 _TERMINAL_STATES = {TaskStatus.COMPLETED, TaskStatus.DEAD}
 
 _ALLOWED_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
-    TaskStatus.PENDING: {TaskStatus.PROCESSING, TaskStatus.DEAD},
+    TaskStatus.PENDING: {
+        TaskStatus.DISPATCHING,  # a dispatcher claimed it
+        TaskStatus.PROCESSING,  # in-process execution, with no broker in the path
+        TaskStatus.DEAD,  # manual kill
+    },
+    TaskStatus.DISPATCHING: {
+        TaskStatus.PROCESSING,  # a worker picked it up off the transport
+        TaskStatus.PENDING,  # dispatch failed, or the dispatch timeout swept it
+        TaskStatus.DEAD,  # manual kill, or attempts exhausted while stuck
+    },
     TaskStatus.PROCESSING: {
         TaskStatus.COMPLETED,
         TaskStatus.FAILED,
