@@ -5,7 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.0] - Unreleased
+## [0.4.0] - Unreleased
+
+First published release. `0.3.0` was skipped: the `dewey` name on PyPI already
+carries a `0.3.0` from an unrelated 2011 project, and PyPI never allows a version
+string to be reused.
+
+### Removed
+- Celery support: the `dewey.adapters.celery` module, the `[celery]` extra, and
+  Celery from the package keywords. Huey is the only advertised transport for the
+  first release. The pre-inversion (`enqueue`-era) Celery adapter is kept for
+  reference on the `archive/celery-adapter-enqueue-era` branch; a Celery adapter
+  can return in a later release against the `register`/`dispatch` contract.
+- `dewey.adapters.BaseAdapter`, the legacy producer-side contract
+  (`enqueue(task_id, queue, priority)` + `enqueue_sweep()`). Producers no longer
+  talk to a broker at all, so the package now publishes exactly one adapter
+  contract: `DispatcherAdapter`.
 
 ### Changed
 - Renamed the scheduling column and Python attribute `process_after` → `scheduled_for`
