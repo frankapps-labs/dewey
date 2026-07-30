@@ -70,6 +70,12 @@ string to be reused.
   transport. Any number of dispatchers cooperate without a leader election.
   Backends: `dewey.sqlalchemy.dispatch.SQLAlchemyDispatchBackend` and
   `dewey.django.dispatch.DjangoDispatchBackend`.
+- Both dispatchers now survive a database outage. Previously an exception from
+  `claim()` — the shape a Postgres blip takes — escaped the run loop and ended the
+  dispatcher process, so claimed work waited for the dispatch timeout and nothing swept
+  at all: a blip became an outage. The loop now logs, backs off and retries, and a
+  release that cannot be written falls through to the dispatch-timeout sweep instead of
+  raising. Found by the resilience lab's `db-outage` scenario.
 - `dewey.dispatcher.AsyncDispatcher` and
   `dewey.sqlalchemy.dispatch.AsyncSQLAlchemyDispatchBackend`, so an asyncpg-only
   deployment does not have to add a synchronous driver and a second engine to run a

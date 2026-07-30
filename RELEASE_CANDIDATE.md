@@ -1,7 +1,7 @@
 # Dewey 0.4.0 — release candidate report
 
 **Status:** awaiting human approval. Nothing is tagged and nothing is published.
-**Commit:** `6a9a4e9` on `release/0.3.0` (branch name predates the version decision)
+**Commit:** see `git log -1` on `release/0.3.0` (branch name predates the version decision)
 **Date:** 2026-07-30
 
 ---
@@ -64,9 +64,11 @@ inspected directly.
 `RetryAfter`, `SerializationError`, `DuplicateTaskTypeError`, `UnknownTaskTypeError`,
 `__version__`.
 
-`dewey.dispatcher`: `Dispatcher`, `DispatchBackend`, `DispatchFn`, and defaults.
+`dewey.dispatcher`: `Dispatcher`, `AsyncDispatcher`, `DispatchBackend`,
+`AsyncDispatchBackend`, `DispatchFn`, and defaults.
 `dewey.sqlalchemy` / `dewey.django`: producer, worker, sweep and query APIs, plus
-`SQLAlchemyDispatchBackend` / `DjangoDispatchBackend`.
+`SQLAlchemyDispatchBackend`, `AsyncSQLAlchemyDispatchBackend` and
+`DjangoDispatchBackend`.
 `dewey.adapters`: `DispatcherAdapter`, `HueyAdapter`.
 
 ---
@@ -105,16 +107,17 @@ Nothing published depends on these; the previous line was in-repo only.
 
 ## Commands and results
 
-All at `6a9a4e9`.
+All at the head of this branch.
 
 | Gate | Result |
 |---|---|
 | `make lint` | All checks passed |
-| `make format-check` | 81 files already formatted |
+| `make format-check` | 82 files already formatted |
 | `make typecheck` (basedpyright) | 0 errors, 0 warnings, 0 notes |
-| `make test` (local Postgres 16) | **522 passed**, 92% coverage |
-| `make test-integration` (compose Postgres + Redis) | **522 passed** |
+| `make test` (local Postgres 16) | **551 passed**, 92% coverage |
+| `make test-integration` (compose Postgres + Redis) | **551 passed** |
 | Multi-dispatcher concurrency (4 threads, 60 tasks, real Postgres) | pass — every task claimed exactly once |
+| Resilience lab, ADR-003 suite (11 scenarios, chaos) | **verdict PASS** |
 | Huey 2.5.5 adapter suite | 17 passed |
 | `uv build` | `dewey-0.4.0.tar.gz`, `dewey-0.4.0-py3-none-any.whl` |
 | `twine check dist/*` | PASSED (both) |
@@ -148,6 +151,11 @@ Worth recording because each would have shipped silently:
    closed, breaking every later checkout.
 4. **`dewey.django.sweep` was ambiguous** — the function on first access, the submodule
    afterwards.
+5. **A database blip killed the dispatcher.** An exception from `claim()` escaped the run
+   loop and ended the process, so claimed work then waited for the dispatch timeout and
+   nothing swept at all. Found by the resilience lab's `db-outage` scenario, which failed
+   on first run against 0.4 (nothing drained, rows stuck in `PROCESSING` for 74s) and
+   passes now (drained in 18.4s, zero dead).
 
 ---
 
@@ -163,8 +171,9 @@ Worth recording because each would have shipped silently:
   reordered.
 - **Throughput is bounded by Postgres writes** — roughly 1-2k tasks/sec before tuning.
   No throughput baseline has been measured for this release.
-- **The async path is thinner on evidence** than the Django/Huey path: it has parity unit
-  tests but no chaos or load coverage yet.
+- **The async path now has chaos coverage** via the resilience lab, whose testbed is an
+  async SQLAlchemy + FastAPI consumer. The Huey-over-Redis transport, by contrast, is
+  covered by unit and installed-wheel smoke tests but not by the lab's chaos scenarios.
 - **Notifications** carry no dispatcher integration and remain experimental.
 
 ---
@@ -183,28 +192,62 @@ Worth recording because each would have shipped silently:
 
 ---
 
+## Resilience lab
+
+The private lab's testbed was migrated to the 0.4 API (`@dewey.task` declarations,
+`kwargs=`, and `AsyncDispatcher` replacing its hand-rolled claim and sweep loops) and the
+ADR-003 release suite was run against this head.
+
+**Verdict: PASS**, all 11 scenarios:
+
+| Scenario | Drain | p95 accept |
+|---|---|---|
+| release-check | 41.81s | 121.16ms |
+| db-sleep | 6.07s | 18.17ms |
+| db-latency (Toxiproxy latency injection) | 10.59s | 11.31ms |
+| db-outage (Postgres disabled mid-flight) | 63.01s | 10.59ms |
+| priority-lane | 3.06s | 29.93ms |
+| priority-lane-batch-pressure | 16.38s | 119.62ms |
+| wake-on-insert-trickle | 60.69s | 12.58ms |
+| cohabitation | 20.18s | 13.34ms |
+| cohabitation-chaos | 31.34s | 1771.60ms |
+| resilience-long | 30.30s | 13.68ms |
+| notification-pressure | 42.43s | 12.66ms |
+
+Plus `worker-kill-check`: passed, 1 completed, 0 dead — a task in flight when its worker
+is killed recovers and completes.
+
+No accept-latency regression against the pre-0.4 baselines recorded in May:
+
+| Scenario | May baseline | Now |
+|---|---|---|
+| release-check | 125.64ms p95, 45.94s drain | 124.88ms, 41.84s |
+| cold-burst | 136.36ms p95 | 118.57ms |
+
+One lab-side finding, not a Dewey defect: the `burst` scenario fails its
+`max_p95_accept_ms: 100` gate at ~177ms. It has no warmup block, so it measures cold
+connection-pool opening against a steady-state threshold — which is what `cold-burst`
+exists to measure, at a 300ms gate, and which the lab's own `release-suite` help text
+already documents ("without [warmup] the same scenario comes in ~175ms"). The gate wants
+recalibrating in the lab; it is not a release blocker.
+
 ## Before publishing
 
-1. **Run the resilience lab** (`research/dewey-resilience-lab`) against this head. Its
-   testbed still targets the pre-0.4 API and needs migrating first. This is the only
-   remaining gate with real chaos coverage — Postgres latency and outage via Toxiproxy,
-   worker kills, drain and p95 gates under load — and it is what would honestly tick
-   PUBLISH_PLAN Phase 10 ("first real consumer"), currently unticked.
-2. **Confirm PyPI ownership** of the `dewey` project in the web UI ("Your projects") —
+1. **Confirm PyPI ownership** of the `dewey` project in the web UI ("Your projects") —
    the JSON API does not expose owners. The README credits the original owner for donating
    the name, so this is a formality, but the first upload is a bad place to discover a
    permissions problem.
-3. **Decide on the notification layer.** It ships experimental. If the intent is to fold
+2. **Decide on the notification layer.** It ships experimental. If the intent is to fold
    it into the task engine later, that is a deliberate breaking change to plan, not to
    discover.
-4. Merge `release/0.3.0` → `main` (`make release` requires `main`).
-5. Tag `v0.4.0` and push; `.github/workflows/publish.yml` publishes on tag via trusted
+3. Merge `release/0.3.0` → `main` (`make release` requires `main`).
+4. Tag `v0.4.0` and push; `.github/workflows/publish.yml` publishes on tag via trusted
    publishing.
-6. Date-stamp the changelog heading at tag time.
+5. Date-stamp the changelog heading at tag time.
 
 ## Publication checklist
 
-- [ ] Resilience lab run green against this head
+- [x] Resilience lab run green against this head (11/11 scenarios, verdict PASS)
 - [ ] PyPI project ownership confirmed
 - [ ] `release/0.3.0` merged to `main`, CI green there
 - [ ] `CHANGELOG.md` heading dated

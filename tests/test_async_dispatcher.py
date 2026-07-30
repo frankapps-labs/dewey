@@ -340,3 +340,93 @@ class TestWakeUp:
             await backend.close()
 
         assert len(await backend.claim(10)) == 1
+
+
+class TestSurvivesDatabaseOutage:
+    """Same guarantee as the sync dispatcher: a database blip is survivable."""
+
+    async def test_a_failing_claim_does_not_end_the_loop(self, backend):
+        calls = []
+
+        async def flaky_claim(limit: int) -> list[str]:
+            calls.append(limit)
+            raise ConnectionError("connection is closed")
+
+        backend.claim = flaky_claim  # type: ignore[method-assign]
+        dispatcher = AsyncDispatcher(
+            backend,
+            lambda task_id: None,
+            idle_poll_seconds=0.01,
+            sweep_interval_seconds=None,
+            dispatch_retry_base_seconds=0.01,
+        )
+
+        await dispatcher.run(max_iterations=3)
+
+        assert len(calls) == 3
+        assert dispatcher._health.retry_delay > 0
+
+    async def test_the_loop_recovers_when_the_database_comes_back(self, backend, async_session):
+        task = await create_task_async(async_session, task_type="t")
+        await async_session.commit()
+
+        real_claim = backend.claim
+        failures = [True]
+
+        async def flaky_claim(limit: int) -> list[str]:
+            if failures[0]:
+                failures[0] = False
+                raise ConnectionError("connection is closed")
+            return await real_claim(limit)
+
+        backend.claim = flaky_claim  # type: ignore[method-assign]
+        seen: list[str] = []
+        dispatcher = AsyncDispatcher(
+            backend,
+            seen.append,
+            idle_poll_seconds=0.01,
+            sweep_interval_seconds=None,
+            dispatch_retry_base_seconds=0.01,
+        )
+
+        await dispatcher.run(max_iterations=2)
+
+        assert seen == [task.id]
+        assert dispatcher._health.retry_delay == 0.0
+
+    async def test_a_failing_release_leaves_the_row_for_the_sweep(self, backend, async_session):
+        task = await create_task_async(async_session, task_type="t")
+        await async_session.commit()
+
+        async def broken_release(task_ids) -> None:
+            raise ConnectionError("connection is closed")
+
+        async def broken_transport(task_id: str) -> None:
+            raise ConnectionError("redis is down")
+
+        backend.release = broken_release  # type: ignore[method-assign]
+        dispatcher = AsyncDispatcher(backend, broken_transport, sweep_interval_seconds=None)
+
+        assert await dispatcher.dispatch_batch() == 0  # did not raise
+        assert await _status(async_session, task.id) == TaskStatus.DISPATCHING.value
+
+    async def test_cancellation_still_wins_over_the_retry_loop(self, backend):
+        """Surviving errors must not make the dispatcher unkillable."""
+
+        async def flaky_claim(limit: int) -> list[str]:
+            raise ConnectionError("connection is closed")
+
+        backend.claim = flaky_claim  # type: ignore[method-assign]
+        dispatcher = AsyncDispatcher(
+            backend,
+            lambda task_id: None,
+            idle_poll_seconds=0.01,
+            sweep_interval_seconds=None,
+            dispatch_retry_base_seconds=5.0,
+        )
+
+        task = asyncio.create_task(dispatcher.run())
+        await asyncio.sleep(0.2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task

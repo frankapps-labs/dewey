@@ -6,6 +6,7 @@ whole point, and neither can be proven against a fake.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -461,3 +462,92 @@ class TestWakeUp:
             timer.cancel()
 
         assert len(backend.claim(10)) == 1
+
+
+class TestSurvivesDatabaseOutage:
+    """A database blip must not end the dispatcher process.
+
+    Found by the resilience lab: when Postgres went away mid-run, `claim()` raised,
+    the exception escaped `run()`, and the dispatcher exited. Claimed work then sat
+    until the dispatch timeout and nothing swept at all — a blip became an outage.
+    """
+
+    def test_a_failing_claim_does_not_end_the_loop(self, backend, collected):
+        calls = []
+
+        def flaky_claim(limit: int) -> list[str]:
+            calls.append(limit)
+            raise ConnectionError("connection is closed")
+
+        backend.claim = flaky_claim  # type: ignore[method-assign]
+        dispatcher = Dispatcher(
+            backend,
+            collected.append,
+            idle_poll_seconds=0.01,
+            sweep_interval_seconds=None,
+            dispatch_retry_base_seconds=0.01,
+        )
+
+        dispatcher.run(max_iterations=3)
+
+        assert len(calls) == 3  # kept trying instead of exiting
+        assert dispatcher._health.retry_delay > 0  # and backed off while broken
+
+    def test_the_loop_recovers_when_the_database_comes_back(self, backend, session, collected):
+        task = create_task(session, task_type="t")
+        session.commit()
+
+        real_claim = backend.claim
+        failures = [True]
+
+        def flaky_claim(limit: int) -> list[str]:
+            if failures[0]:
+                failures[0] = False
+                raise ConnectionError("connection is closed")
+            return real_claim(limit)
+
+        backend.claim = flaky_claim  # type: ignore[method-assign]
+        dispatcher = Dispatcher(
+            backend,
+            collected.append,
+            idle_poll_seconds=0.01,
+            sweep_interval_seconds=None,
+            dispatch_retry_base_seconds=0.01,
+        )
+
+        dispatcher.run(max_iterations=2)
+
+        assert collected == [task.id]
+        assert dispatcher._health.retry_delay == 0.0
+
+    def test_a_failing_release_leaves_the_row_for_the_sweep(self, backend, session, caplog):
+        """If the database is what broke, the release cannot be written either."""
+        task = create_task(session, task_type="t")
+        session.commit()
+
+        def broken_release(task_ids) -> None:
+            raise ConnectionError("connection is closed")
+
+        backend.release = broken_release  # type: ignore[method-assign]
+
+        def broken_transport(task_id: str) -> None:
+            raise ConnectionError("redis is down")
+
+        dispatcher = Dispatcher(backend, broken_transport, sweep_interval_seconds=None)
+
+        with caplog.at_level(logging.WARNING):
+            assert dispatcher.dispatch_batch() == 0  # did not raise
+
+        assert "dispatch-timeout sweep will reclaim them" in caplog.text
+        assert _status(session, task.id) == TaskStatus.DISPATCHING.value
+
+    def test_a_failing_sweep_is_already_tolerated(self, backend, collected):
+        def boom() -> dict[str, list[str]]:
+            raise ConnectionError("connection is closed")
+
+        backend.run_sweep = boom  # type: ignore[method-assign]
+        dispatcher = Dispatcher(
+            backend, collected.append, idle_poll_seconds=0.01, sweep_interval_seconds=0.0
+        )
+
+        dispatcher.run(max_iterations=2)  # must not raise

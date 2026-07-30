@@ -193,7 +193,7 @@ class Dispatcher:
                     len(unsent),
                     exc_info=True,
                 )
-                self.backend.release(unsent)
+                self._release_quietly(unsent)
                 self._health.note_failure()
                 return index
             logger.debug("Dispatched task_id=%s", task_id)
@@ -236,8 +236,20 @@ class Dispatcher:
                     break
                 iterations += 1
 
-                self.maybe_sweep()
-                dispatched = self.dispatch_batch()
+                try:
+                    self.maybe_sweep()
+                    dispatched = self.dispatch_batch()
+                except Exception:
+                    # Almost always the database going away underneath us. A
+                    # dispatcher that exits here is worse than useless: claimed work
+                    # waits for the dispatch timeout and nothing sweeps at all, so a
+                    # blip becomes an outage. Back off and try again.
+                    logger.warning(
+                        "Dispatcher iteration failed; backing off and retrying",
+                        exc_info=True,
+                    )
+                    self._health.note_failure()
+                    dispatched = 0
 
                 if self._health.retry_delay:
                     # The transport is unhealthy. Wait, rather than spinning on a
@@ -251,6 +263,23 @@ class Dispatcher:
         finally:
             logger.info("Dewey dispatcher stopped after %d iteration(s)", iterations)
             self.backend.close()
+
+    def _release_quietly(self, task_ids: Sequence[str]) -> None:
+        """Release claims, tolerating a database that is itself unavailable.
+
+        If the release cannot be written, the rows stay in DISPATCHING and the
+        dispatch-timeout sweep reclaims them. That backstop exists precisely so this
+        path never has to be fatal.
+        """
+        try:
+            self.backend.release(task_ids)
+        except Exception:
+            logger.warning(
+                "Could not return %d claimed task(s) to pending; the dispatch-timeout "
+                "sweep will reclaim them",
+                len(task_ids),
+                exc_info=True,
+            )
 
     def stop(self) -> None:
         """Ask the loop to finish. Safe to call from a signal handler."""
@@ -366,7 +395,7 @@ class AsyncDispatcher:
                     len(unsent),
                     exc_info=True,
                 )
-                await self.backend.release(unsent)
+                await self._release_quietly(unsent)
                 self._health.note_failure()
                 return index
             logger.debug("Dispatched task_id=%s", task_id)
@@ -404,8 +433,20 @@ class AsyncDispatcher:
                     break
                 iterations += 1
 
-                await self.maybe_sweep()
-                dispatched = await self.dispatch_batch()
+                try:
+                    await self.maybe_sweep()
+                    dispatched = await self.dispatch_batch()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # See the sync dispatcher: surviving a database blip is the whole
+                    # point of a long-running loop.
+                    logger.warning(
+                        "Dispatcher iteration failed; backing off and retrying",
+                        exc_info=True,
+                    )
+                    self._health.note_failure()
+                    dispatched = 0
 
                 if self._health.retry_delay:
                     await self._sleep(self._health.retry_delay)
@@ -419,6 +460,22 @@ class AsyncDispatcher:
         finally:
             logger.info("Dewey async dispatcher stopped after %d iteration(s)", iterations)
             await self.backend.close()
+
+    async def _release_quietly(self, task_ids: Sequence[str]) -> None:
+        """Release claims, tolerating a database that is itself unavailable.
+
+        The rows stay in DISPATCHING if this cannot be written, and the
+        dispatch-timeout sweep reclaims them.
+        """
+        try:
+            await self.backend.release(task_ids)
+        except Exception:
+            logger.warning(
+                "Could not return %d claimed task(s) to pending; the dispatch-timeout "
+                "sweep will reclaim them",
+                len(task_ids),
+                exc_info=True,
+            )
 
     async def _sleep(self, seconds: float) -> None:
         """Sleep, but wake immediately if asked to stop."""
