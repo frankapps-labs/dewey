@@ -233,22 +233,28 @@ recalibrating in the lab; it is not a release blocker.
 
 ## Before publishing
 
-1. **Confirm PyPI ownership** of the `dewey` project in the web UI ("Your projects") —
+1. **Confirm the repo lives at `frankapps-labs/dewey`.** Project metadata, the
+   CONTRIBUTING clone URL and the SECURITY advisory link now all point there, matching
+   the git remote. The four `[project.urls]` entries become the PyPI sidebar
+   permanently for 0.4.0, so a wrong org there is not fixable in-place.
+2. **Confirm PyPI ownership** of the `dewey` project in the web UI ("Your projects") —
    the JSON API does not expose owners. The README credits the original owner for donating
    the name, so this is a formality, but the first upload is a bad place to discover a
    permissions problem.
-2. **Decide on the notification layer.** It ships experimental. If the intent is to fold
+3. **Decide on the notification layer.** It ships experimental. If the intent is to fold
    it into the task engine later, that is a deliberate breaking change to plan, not to
    discover.
-3. Merge `release/0.3.0` → `main` (`make release` requires `main`).
-4. Tag `v0.4.0` and push; `.github/workflows/publish.yml` publishes on tag via trusted
+4. Merge `release/0.3.0` → `main` (`make release` requires `main`).
+5. Tag `v0.4.0` and push; `.github/workflows/publish.yml` publishes on tag via trusted
    publishing.
-5. Date-stamp the changelog heading at tag time.
+6. Date-stamp the changelog heading at tag time.
 
 ## Publication checklist
 
 - [x] Resilience lab run green against this head (11/11 scenarios, verdict PASS)
 - [ ] PyPI project ownership confirmed
+- [ ] `archive/celery-adapter-enqueue-era` pushed, so the changelog's reference to it is
+      true for anyone reading it
 - [ ] `release/0.3.0` merged to `main`, CI green there
 - [ ] `CHANGELOG.md` heading dated
 - [ ] `git tag v0.4.0 && git push --tags`

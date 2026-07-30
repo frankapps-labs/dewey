@@ -9,7 +9,7 @@ long-term support branches yet.
 
 Please report privately, not as a public issue:
 
-- Open a [private security advisory](https://github.com/frankapps-io/dewey/security/advisories/new), or
+- Open a [private security advisory](https://github.com/frankapps-labs/dewey/security/advisories/new), or
 - email **hello@frankapps.com** with `dewey security` in the subject.
 
 Useful detail: affected version, what an attacker can achieve, and a reproduction if you

@@ -7,7 +7,7 @@ solid rather than adding a new one.
 ## Getting set up
 
 ```bash
-git clone https://github.com/frankapps-io/dewey
+git clone https://github.com/frankapps-labs/dewey
 cd dewey
 make install          # uv sync with all extras
 make up               # Postgres + Redis in Docker, on offset ports

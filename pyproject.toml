@@ -66,10 +66,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/frankapps-io/dewey"
-Documentation = "https://github.com/frankapps-io/dewey"
-Repository = "https://github.com/frankapps-io/dewey"
-"Bug Tracker" = "https://github.com/frankapps-io/dewey/issues"
+Homepage = "https://github.com/frankapps-labs/dewey"
+Documentation = "https://github.com/frankapps-labs/dewey"
+Repository = "https://github.com/frankapps-labs/dewey"
+"Bug Tracker" = "https://github.com/frankapps-labs/dewey/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
