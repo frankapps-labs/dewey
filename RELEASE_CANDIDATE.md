@@ -1,0 +1,214 @@
+# Dewey 0.4.0 — release candidate report
+
+**Status:** awaiting human approval. Nothing is tagged and nothing is published.
+**Commit:** `6a9a4e9` on `release/0.3.0` (branch name predates the version decision)
+**Date:** 2026-07-30
+
+---
+
+## Proposed release
+
+| | |
+|---|---|
+| Version | **0.4.0** |
+| Tag | `v0.4.0`, cut from `main` after merge |
+| Distribution name | `dewey` (unchanged) |
+
+**Why 0.4.0 and not 0.3.0.** PyPI's `dewey` project already carries `0.3` and `0.3.0`
+from the original project (sdist uploaded 2011-09-29, not yanked). PyPI permanently
+refuses re-upload of a version string that has ever existed, even after deletion — so
+`0.3.0` is unpublishable under this name regardless of ownership. `0.4.0` is
+unambiguously above everything on the index. The "0.3 architecture" label survives in the
+private ADRs; the published version is 0.4.0.
+
+---
+
+## Schema
+
+Table `task_entries` (Django migration `dewey/0001_initial`, and
+`Base.metadata.create_all` for SQLAlchemy):
+
+**Changed from the previous in-repo schema**
+
+- **dropped** `payload JSON`
+- **added** `args JSON NOT NULL` (list), `kwargs JSON NOT NULL` (dict)
+- **added** `dispatching_at TIMESTAMPTZ NULL`
+- status domain gains `dispatching`
+- `process_after` → `scheduled_for` (predates this release)
+
+**Indexes** (verified in real Postgres DDL)
+
+| Name | Definition |
+|---|---|
+| `ix_task_pending_sched` | `(scheduled_for) WHERE status = 'pending'` |
+| `ix_task_dispatching` | `(dispatching_at) WHERE status = 'dispatching'` |
+| `ix_task_processing_started` | `(started_at) WHERE status = 'processing'` |
+| `ix_task_failed_sched` | `(scheduled_for) WHERE status = 'failed'` |
+| `ix_task_type_created` | `(task_type, created_at)` |
+| `uq_task_type_idempotency_key` | `UNIQUE (task_type, idempotency_key)` |
+
+Notification tables are unchanged and included in the migration.
+
+**Migration verified:** fresh `migrate` on an empty database, `makemigrations --check`
+reports no drift, `migrate dewey zero` then re-apply succeeds, partial-index DDL
+inspected directly.
+
+---
+
+## Public API
+
+`dewey` (framework-free): `task`, `TaskPolicy`, `TASK_DEFAULTS`, `Constant`,
+`Exponential`, `Custom`, `BackoffPolicy`, `PolicyRegistry`, `registry`,
+`resolve_policy`, `configure_policies`, `clear_project_policies`, `encode_args`,
+`encode_kwargs`, `TaskStatus`, `DeweyError`, `TransientError`, `NonRetryableError`,
+`RetryAfter`, `SerializationError`, `DuplicateTaskTypeError`, `UnknownTaskTypeError`,
+`__version__`.
+
+`dewey.dispatcher`: `Dispatcher`, `DispatchBackend`, `DispatchFn`, and defaults.
+`dewey.sqlalchemy` / `dewey.django`: producer, worker, sweep and query APIs, plus
+`SQLAlchemyDispatchBackend` / `DjangoDispatchBackend`.
+`dewey.adapters`: `DispatcherAdapter`, `HueyAdapter`.
+
+---
+
+## Breaking changes
+
+Nothing published depends on these; the previous line was in-repo only.
+
+1. **`payload` → `args` / `kwargs`.** Handlers are invoked `handler(*args, **kwargs)`
+   instead of `handler(task_type, payload)`.
+2. **`process_task(session, task_id)` no longer needs a handler.** It resolves the
+   handler and retry rules from the task type. Passing one explicitly still works.
+3. **`adapter.enqueue()` is gone**, along with `BaseAdapter` and
+   `HueyAdapter.setup()`. Producers do not talk to a broker; the dispatcher does.
+4. **Celery removed** — module, extra, keyword. Archived on
+   `archive/celery-adapter-enqueue-era`.
+5. **`create_task` defaults** `queue`, `priority` and `max_attempts` from policy.
+6. **A dispatcher is now required** for work to move at all, including retries.
+7. **Notifications are experimental** and outside the stability statement.
+
+---
+
+## Support matrix
+
+| | Supported | Verified how |
+|---|---|---|
+| Python | 3.11, 3.12, 3.13 | CI matrix; suite run locally on 3.13 |
+| PostgreSQL | 13+ | Suite against 16 (local and compose) |
+| Django | 4.2+ | 6.0.7 locally; CI pins 4.2 and 5.1 explicitly |
+| SQLAlchemy | 2.0+ | 2.0.49 locally, sync and async |
+| Huey | 2.5+ | 3.0.0 locally; 2.5.5 verified separately, CI lane pins 2.5 |
+| Drivers | psycopg2, psycopg3, asyncpg | psycopg2 + asyncpg exercised; psycopg3 path is code-only (see limitations) |
+| Celery | not supported | removed |
+
+---
+
+## Commands and results
+
+All at `6a9a4e9`.
+
+| Gate | Result |
+|---|---|
+| `make lint` | All checks passed |
+| `make format-check` | 81 files already formatted |
+| `make typecheck` (basedpyright) | 0 errors, 0 warnings, 0 notes |
+| `make test` (local Postgres 16) | **522 passed**, 92% coverage |
+| `make test-integration` (compose Postgres + Redis) | **522 passed** |
+| Multi-dispatcher concurrency (4 threads, 60 tasks, real Postgres) | pass — every task claimed exactly once |
+| Huey 2.5.5 adapter suite | 17 passed |
+| `uv build` | `dewey-0.4.0.tar.gz`, `dewey-0.4.0-py3-none-any.whl` |
+| `twine check dist/*` | PASSED (both) |
+| Installed-wheel smoke (clean venv, real Postgres + Redis) | all checks passed |
+| Wheel contents | 40 modules + `py.typed` + migrations; no tests, no private paths |
+| Dependency audit (OSV) | 0 advisories across Django, Huey, SQLAlchemy, asyncpg, psycopg2 |
+| Public/private boundary | no HQ paths, ADR text, or internal product names in the tree or artifacts |
+
+The installed-wheel smoke covers: migrate from shipped migrations, declare and create a
+task inside an atomic block, dispatch, process to `COMPLETED`, duplicate delivery,
+rolled-back producer, Redis outage and recovery, retry then dead-letter, and a real Redis
+round trip through a Huey worker.
+
+`pip-audit` itself could not run on this machine (`ensurepip` aborts when it builds its
+temporary venv), so the audit queries the same OSV database directly.
+
+---
+
+## Bugs found and fixed during this work
+
+Worth recording because each would have shipped silently:
+
+1. **The claim query took the whole table.** `UPDATE ... WHERE id IN (SELECT ... LIMIT n
+   FOR UPDATE SKIP LOCKED)` reads correctly, but Postgres may re-execute that subplan per
+   candidate row, and each row then finds itself in its own result. Both backends now lock
+   first and update the locked IDs.
+2. **LISTEN was silently disabled.** `detach()` clears the connection fairy's
+   `driver_connection`, so reading it afterwards returned `None` and the dispatcher fell
+   back to polling forever. A test now asserts the backend really gets a listener.
+3. **The listen connection poisoned the pool.** Taken from the SQLAlchemy pool and then
+   closed, breaking every later checkout.
+4. **`dewey.django.sweep` was ambiguous** — the function on first access, the submodule
+   afterwards.
+
+---
+
+## Known limitations
+
+- **The psycopg3 LISTEN path is code-only.** The driver-detection branch exists and
+  degrades safely, but the local environment runs psycopg2, so psycopg3 wake-up has not
+  been exercised end to end. Worst case is a fall back to polling.
+- **No timeout enforcement.** A hung handler holds its worker until the stuck sweep
+  notices; use the worker's own timeout for a hard limit.
+- **No scheduler.** Periodic work needs an external trigger calling `create_task`.
+- **Priority is claim-time only**, not preemption. Work already dispatched is not
+  reordered.
+- **Throughput is bounded by Postgres writes** — roughly 1-2k tasks/sec before tuning.
+  No throughput baseline has been measured for this release.
+- **The async path is thinner on evidence** than the Django/Huey path: it has parity unit
+  tests but no chaos or load coverage yet.
+- **Notifications** carry no dispatcher integration and remain experimental.
+
+---
+
+## Deferred scope
+
+| Deferred | Why |
+|---|---|
+| ADR-004 safety checks (`dewey check`, safety metadata, `docs/task-safety.md`) | Would add a second, larger policy vocabulary before the first has been used in production |
+| DB runtime policy overrides | No admin surface to drive them; resolver is already layered for it |
+| Lifecycle hooks (`on_complete` / `on_fail` / `on_retry`) | No consumer needs them, and the latency payload wants designing with them |
+| Policy-level `dedupe_key` / `dedupe_window_s` | Producer-supplied `idempotency_key` covers the first consumer |
+| Fairness, rate limits, concurrency caps, hard timeouts, expiry | Tier 2 |
+| Celery adapter | No integration coverage; archived branch to port from |
+| Native scheduler, non-Python runners, admin UI, hosted service | Out of scope |
+
+---
+
+## Before publishing
+
+1. **Run the resilience lab** (`research/dewey-resilience-lab`) against this head. Its
+   testbed still targets the pre-0.4 API and needs migrating first. This is the only
+   remaining gate with real chaos coverage — Postgres latency and outage via Toxiproxy,
+   worker kills, drain and p95 gates under load — and it is what would honestly tick
+   PUBLISH_PLAN Phase 10 ("first real consumer"), currently unticked.
+2. **Confirm PyPI ownership** of the `dewey` project in the web UI ("Your projects") —
+   the JSON API does not expose owners. The README credits the original owner for donating
+   the name, so this is a formality, but the first upload is a bad place to discover a
+   permissions problem.
+3. **Decide on the notification layer.** It ships experimental. If the intent is to fold
+   it into the task engine later, that is a deliberate breaking change to plan, not to
+   discover.
+4. Merge `release/0.3.0` → `main` (`make release` requires `main`).
+5. Tag `v0.4.0` and push; `.github/workflows/publish.yml` publishes on tag via trusted
+   publishing.
+6. Date-stamp the changelog heading at tag time.
+
+## Publication checklist
+
+- [ ] Resilience lab run green against this head
+- [ ] PyPI project ownership confirmed
+- [ ] `release/0.3.0` merged to `main`, CI green there
+- [ ] `CHANGELOG.md` heading dated
+- [ ] `git tag v0.4.0 && git push --tags`
+- [ ] PyPI shows 0.4.0; `pip install dewey==0.4.0` in a clean venv
+- [ ] GitHub release created from the changelog section
+- [ ] Post-publish: install the published wheel and re-run the smoke script against it
