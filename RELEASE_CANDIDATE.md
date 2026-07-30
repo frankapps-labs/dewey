@@ -1,7 +1,7 @@
 # Dewey 0.4.0 — release candidate report
 
 **Status:** awaiting human approval. Nothing is tagged and nothing is published.
-**Commit:** see `git log -1` on `release/0.3.0` (branch name predates the version decision)
+**Branch:** `release/0.4.0`
 **Date:** 2026-07-30
 
 ---
@@ -244,7 +244,7 @@ recalibrating in the lab; it is not a release blocker.
 3. **Decide on the notification layer.** It ships experimental. If the intent is to fold
    it into the task engine later, that is a deliberate breaking change to plan, not to
    discover.
-4. Merge `release/0.3.0` → `main` (`make release` requires `main`).
+4. Merge `release/0.4.0` → `main` (`make release` requires `main`).
 5. Tag `v0.4.0` and push; `.github/workflows/publish.yml` publishes on tag via trusted
    publishing.
 6. Date-stamp the changelog heading at tag time.
@@ -255,7 +255,7 @@ recalibrating in the lab; it is not a release blocker.
 - [ ] PyPI project ownership confirmed
 - [ ] `archive/celery-adapter-enqueue-era` pushed, so the changelog's reference to it is
       true for anyone reading it
-- [ ] `release/0.3.0` merged to `main`, CI green there
+- [ ] `release/0.4.0` merged to `main`, CI green there
 - [ ] `CHANGELOG.md` heading dated
 - [ ] `git tag v0.4.0 && git push --tags`
 - [ ] PyPI shows 0.4.0; `pip install dewey==0.4.0` in a clean venv
