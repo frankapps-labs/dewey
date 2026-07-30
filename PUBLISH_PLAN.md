@@ -232,11 +232,17 @@ sustained insert pressure.
 
 ## Phase 10 — First real consumer
 
-- [ ] Wire Dewey into a real async SQLAlchemy consumer before public release.
-- [ ] Keep the task queue/broker as transport and Dewey/Postgres as guarantee.
-- [ ] Prefer shadow-mode or a non-critical task type first, then cut over one
-      production task type at a time.
-- [ ] Feed integration rough edges back into Dewey before public release.
-- [ ] Tag/publish `0.3.0` once the dispatcher, TaskPolicy, safety checks, and
-      first real integration are clean.
-- [ ] Promote to `1.0` only after real usage proves the API stable.
+- [x] Wired into a real async SQLAlchemy consumer (FastAPI + asyncpg) and exercised
+      under chaos before release: Toxiproxy-injected Postgres latency, a mid-flight
+      Postgres outage, worker kills, cohabitation pressure, and drain/p95 gates
+      under load. 11/11 scenarios pass.
+- [x] Broker stays transport, Postgres stays the guarantee — proven by the
+      broker-outage leg of the installed-wheel smoke and the DB-outage scenario.
+- [x] Integration rough edges fed back before release. Two of them were real
+      defects the unit suite could not see: a dispatcher that exited on a database
+      blip, and the absence of an async dispatcher at all.
+- [ ] Cut over a production task type, one at a time, after publishing. Deliberately
+      after: the point of publishing 0.x is to learn from real usage, and the
+      pre-release validation above is what makes that safe to start.
+- [ ] Tag/publish `0.4.0` once a human approves the release-candidate report.
+- [ ] Promote to `1.0` only after real production usage proves the API stable.
