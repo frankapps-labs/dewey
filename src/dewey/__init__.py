@@ -40,6 +40,7 @@ from dewey.policy import (
     resolve_policy,
     task,
 )
+from dewey.serialization import encode_args, encode_kwargs
 
 try:
     __version__ = version("dewey")
@@ -65,6 +66,8 @@ __all__ = [
     "__version__",
     "clear_project_policies",
     "configure_policies",
+    "encode_args",
+    "encode_kwargs",
     "registry",
     "resolve_policy",
     "task",

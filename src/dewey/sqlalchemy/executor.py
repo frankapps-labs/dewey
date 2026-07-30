@@ -19,6 +19,7 @@ from dewey.core.logging import (
 )
 from dewey.core.states import TaskStatus
 from dewey.policy import resolve_policy
+from dewey.serialization import encode_args, encode_kwargs
 from dewey.sqlalchemy.listen import notify_work_available
 from dewey.sqlalchemy.models import TaskEntryModel
 
@@ -61,8 +62,8 @@ def create_task(
     queue = policy.queue if queue is None else queue
     task = TaskEntryModel(
         task_type=task_type,
-        args=list(args or []),
-        kwargs=dict(kwargs or {}),
+        args=encode_args(args),
+        kwargs=encode_kwargs(kwargs),
         queue=queue,
         priority=policy.priority if priority is None else priority,
         max_attempts=policy.max_attempts if max_attempts is None else max_attempts,

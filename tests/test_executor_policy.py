@@ -201,3 +201,39 @@ class TestRetryAfter:
     def test_negative_retry_after_is_refused_at_construction(self):
         with pytest.raises(ValueError, match="must not be negative"):
             RetryAfter(-1)
+
+
+class TestProducerSerialization:
+    """create_task encodes arguments, and refuses what it cannot store honestly."""
+
+    def test_rich_types_are_encoded_on_the_row(self, session):
+        from datetime import date
+        from decimal import Decimal
+        from uuid import UUID
+
+        task = create_task(
+            session,
+            task_type="invoice.send",
+            args=[UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")],
+            kwargs={"due": date(2026, 1, 31), "amount": Decimal("19.99")},
+        )
+        assert task.args == ["6ba7b810-9dad-11d1-80b4-00c04fd430c8"]
+        assert task.kwargs == {"due": "2026-01-31", "amount": "19.99"}
+
+    def test_bytes_are_refused_before_the_row_is_written(self, session):
+        from dewey.errors import SerializationError
+
+        with pytest.raises(SerializationError):
+            create_task(session, task_type="invoice.send", kwargs={"blob": b"nope"})
+
+        session.rollback()
+        assert session.execute(select(TaskEntryModel)).scalars().all() == []
+
+    def test_an_orm_instance_is_refused(self, session):
+        from dewey.errors import SerializationError
+
+        other = create_task(session, task_type="other")
+        session.commit()
+
+        with pytest.raises(SerializationError, match="TaskEntryModel"):
+            create_task(session, task_type="invoice.send", args=[other])

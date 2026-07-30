@@ -20,6 +20,7 @@ from dewey.core.states import TaskStatus
 from dewey.core.types import TaskEntry as TaskEntryDC
 from dewey.django.models import TaskEntry
 from dewey.policy import resolve_policy
+from dewey.serialization import encode_args, encode_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +52,8 @@ def create_task(
     queue = policy.queue if queue is None else queue
     task = TaskEntry.objects.create(
         task_type=task_type,
-        args=list(args or []),
-        kwargs=dict(kwargs or {}),
+        args=encode_args(args),
+        kwargs=encode_kwargs(kwargs),
         metadata=metadata or {},
         queue=queue,
         priority=policy.priority if priority is None else priority,
