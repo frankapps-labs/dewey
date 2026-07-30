@@ -59,10 +59,7 @@ class PostgresConcurrencyHarness:
                     )
                 )
                 conn.execute(
-                    text(
-                        f'INSERT INTO "{self.table_name}" (id) '
-                        "SELECT generate_series(1, :count)"
-                    ),
+                    text(f'INSERT INTO "{self.table_name}" (id) SELECT generate_series(1, :count)'),
                     {"count": item_count},
                 )
         finally:
@@ -133,18 +130,14 @@ class PostgresConcurrencyHarness:
                 if worker.is_alive():
                     worker.terminate()
                     worker.join(timeout=2)
-                    errors.append(
-                        (worker.name, f"{worker.name} did not finish within timeout")
-                    )
+                    errors.append((worker.name, f"{worker.name} did not finish within timeout"))
             result_queue.close()
             result_queue.join_thread()
 
         if errors:
             first_id, first_tb = errors[0]
             extra = f" (+{len(errors) - 1} more)" if len(errors) > 1 else ""
-            raise RuntimeError(
-                f"claim worker {first_id!r} failed{extra}:\n{first_tb}"
-            )
+            raise RuntimeError(f"claim worker {first_id!r} failed{extra}:\n{first_tb}")
 
         if received < worker_count:
             raise RuntimeError(

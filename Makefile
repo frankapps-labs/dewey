@@ -1,4 +1,4 @@
-.PHONY: help install test test-cov lint typecheck format clean build publish-test publish release ci setup
+.PHONY: help install test test-cov lint typecheck format format-check clean build publish-test publish release ci setup
 
 PACKAGE := src/dewey
 
@@ -14,6 +14,7 @@ help:
 	@echo "  make lint          Run linting checks"
 	@echo "  make typecheck     Run basedpyright type checks"
 	@echo "  make format        Format code with ruff"
+	@echo "  make format-check  Check formatting without writing"
 	@echo ""
 	@echo "Building & Publishing:"
 	@echo "  make clean         Remove build artifacts"
@@ -40,6 +41,9 @@ typecheck:
 format:
 	uv run ruff check --fix $(PACKAGE) tests
 	uv run ruff format $(PACKAGE) tests
+
+format-check:
+	uv run ruff format --check $(PACKAGE) tests
 
 clean:
 	rm -rf build/ dist/ *.egg-info htmlcov/ .pytest_cache/ .pyright/ .coverage

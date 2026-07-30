@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dewey"
-version = "0.3.0"
+version = "0.4.0"
 description = "Dewey — Guaranteed delivery engine for Python. Postgres-backed task delivery with multi-channel notifications."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -13,12 +13,12 @@ authors = [
     {name = "Frankapps", email = "hello@frankapps.com"}
 ]
 keywords = [
-    "task", "queue", "ledger", "guaranteed-delivery", "notifications",
-    "postgres", "sqlalchemy", "django", "huey", "celery",
+    "task", "queue", "ledger", "guaranteed-delivery", "dispatcher",
+    "postgres", "sqlalchemy", "django", "huey",
     "dead-letter", "retry", "backoff", "sweep",
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
@@ -44,9 +44,6 @@ django = [
 huey = [
     "huey>=2.5",
 ]
-celery = [
-    "celery>=5.3",
-]
 
 [dependency-groups]
 dev = [
@@ -63,7 +60,6 @@ dev = [
     "Django>=4.2",
     "psycopg2-binary>=2.9",
     "huey>=2.5",
-    "celery>=5.3",
 ]
 
 [project.urls]
