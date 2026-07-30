@@ -1,269 +1,317 @@
 # Getting started
 
-## Quick Start — SQLAlchemy
+Dewey needs three things running: your application (the producer), a dispatcher, and at
+least one worker. The producer writes rows. The dispatcher claims them and hands IDs to
+a transport. Workers process them.
 
-### 1. Create the table
+This guide sets that up for Django, SQLAlchemy sync, and SQLAlchemy async.
 
-```python
-from dewey.sqlalchemy.models import Base
+## Before you start
 
-# With Alembic or direct:
-Base.metadata.create_all(engine)
-```
+- PostgreSQL 13+. Dewey uses `FOR UPDATE SKIP LOCKED`, partial indexes and
+  LISTEN/NOTIFY; SQLite and MySQL are not supported for the ledger.
+- Python 3.11+.
+- A broker only if you want one. Huey over Redis is the supported transport; for a
+  single-process setup you can dispatch straight into an in-process function.
 
-### 2. Write a task to the ledger
+---
 
-```python
-from dewey.sqlalchemy.executor import create_task
+## Django
 
-with Session(engine) as session:
-    task = create_task(
-        session,
-        task_type="order.confirmed",
-        payload={"order_id": "ORD-123", "total": "£49.99"},
-        queue="default",
-        priority=60,
-    )
-    session.commit()
-
-    # Enqueue to your broker
-    adapter.enqueue(task.id, queue=task.queue, priority=task.priority)
-```
-
-### 3. Process tasks in your worker
-
-```python
-from dewey.sqlalchemy.executor import process_task
-
-def my_handler(task_type: str, payload: dict):
-    """Your business logic. Raise to fail, return to complete."""
-    if task_type == "order.confirmed":
-        send_confirmation_email(payload["order_id"])
-
-def worker_process(task_id: str):
-    with Session(engine) as session:
-        process_task(session, task_id, handler=my_handler)
-        session.commit()
-```
-
-### 4. Set up the sweep
-
-```python
-from dewey.sqlalchemy.sweep import sweep
-
-# Call every ~5 minutes from a periodic task
-with Session(engine) as session:
-    result = sweep(session)
-    session.commit()
-    # Re-enqueue swept tasks
-    for task_id in result["failed"] + result["stuck"]:
-        adapter.enqueue(task_id)
-```
-
-### 5. Schedule a task for later
-
-Pass `scheduled_for` (a `datetime`) to defer a task. The sweep and
-`process_task` both honor it — a task whose `scheduled_for` is in the
-future stays `PENDING` and is not picked up:
-
-```python
-from datetime import datetime, timedelta, UTC
-from dewey.sqlalchemy.executor import create_task
-
-with Session(engine) as session:
-    task = create_task(
-        session,
-        task_type="reminder.send",
-        payload={"user_id": "u-42"},
-        scheduled_for=datetime.now(UTC) + timedelta(hours=1),
-    )
-    session.commit()
-```
-
-The same parameter is available on `create_task_async` and on the
-Django `create_task` (no session arg).
-
-### 6. Query the ledger
-
-```python
-from dewey.sqlalchemy.queries import (
-    get_stats, get_failed, retry_task, kill_task, purge_completed,
-)
-
-with Session(engine) as session:
-    stats = get_stats(session)
-    # {"pending": 12, "processing": 3, "completed": 4891, "failed": 2, "dead": 1}
-
-    failed = get_failed(session, task_type="order.confirmed")
-    retry_task(session, task_id="abc-123")
-    kill_task(session, task_id="def-456")
-    purge_completed(session, older_than_days=30)
-    session.commit()
-```
-
-## Quick Start — Async (FastAPI)
-
-If your app is async (FastAPI, Starlette, etc.), use the `_async` variants. Same guarantees, same state machine — just `await`.
-
-### Install
+### 1. Install and add the app
 
 ```bash
-pip install "dewey[sqlalchemy,async]"
+pip install "dewey[django,huey]"
 ```
-
-### 1. Write a task to the ledger
-
-```python
-from dewey.sqlalchemy.async_executor import create_task_async
-
-async with async_session() as session:
-    task = await create_task_async(
-        session,
-        task_type="scan",
-        payload={"url": "https://example.com", "max_pages": 10},
-    )
-    await session.commit()
-
-    # Enqueue to broker (Huey/Celery — still sync, that's fine)
-    adapter.enqueue(task.id)
-```
-
-### 2. Process tasks — handler is async
-
-```python
-from dewey.sqlalchemy.async_executor import process_task_async
-
-async def handle_scan(task_type: str, payload: dict):
-    """Your async business logic. Raise to fail, return to complete."""
-    await run_playwright_scan(payload["url"], payload["max_pages"])
-
-async def worker_process(task_id: str):
-    async with async_session() as session:
-        await process_task_async(session, task_id, handler=handle_scan)
-```
-
-### 3. Sweep
-
-```python
-from dewey.sqlalchemy.async_sweep import sweep_async
-
-async with async_session() as session:
-    result = await sweep_async(session)
-    await session.commit()
-    for task_id in result["failed"] + result["stuck"]:
-        adapter.enqueue(task_id)
-```
-
-### 4. Query
-
-```python
-from dewey.sqlalchemy.async_queries import get_stats_async, get_failed_async, retry_task_async
-
-async with async_session() as session:
-    stats = await get_stats_async(session)
-    failed = await get_failed_async(session, task_type="scan")
-    await retry_task_async(session, task_id="abc-123")
-    await session.commit()
-```
-
-### Async notifications work too
-
-Every notification function has an `_async` variant:
-
-```python
-from dewey.sqlalchemy.async_notifications import (
-    create_notifications_for_event_async,
-    send_notification_async,
-    sweep_notifications_async,
-)
-```
-
-### Why the handler is async
-
-The whole point: your scan pipeline / Playwright / httpx calls are already async.
-With sync dewey, you'd bridge back via `asyncio.run()` inside a Huey worker.
-With async dewey, the handler is a coroutine — your async code plugs straight in.
-
-```python
-# Sync dewey in a Huey worker — needs a bridge:
-@huey.task()
-def process(task_id):
-    asyncio.run(process_task_async(session, task_id, handler))  # awkward
-
-# Async dewey in-process — no bridge:
-asyncio.create_task(process_task_async(session, task_id, handler))  # native
-```
-
-## Quick Start — Django
-
-### 1. Add to INSTALLED_APPS and migrate
 
 ```python
 # settings.py
 INSTALLED_APPS = [
-    # ...
+    ...,
     "dewey.django",
 ]
+
+DEWEY = {
+    # Required: dotted path to your transport's dispatch callable.
+    "DISPATCH": "myapp.tasks.adapter.dispatch",
+}
 ```
 
 ```bash
 python manage.py migrate
 ```
 
-### 2. Write a task to the ledger
+Migrations ship in the package, so that is all the schema setup there is.
+
+### 2. Declare a task
+
+Anywhere Django imports at startup — `myapp/tasks.py` is the convention.
 
 ```python
-from dewey.django.executor import create_task
+# myapp/tasks.py
+import dewey
+from myapp.models import Command
 
-task = create_task(
-    task_type="order.confirmed",
-    payload={"order_id": "ORD-123", "total": "£49.99"},
-    queue="default",
-    priority=60,
+@dewey.task("agent.notify", max_attempts=5, backoff=dewey.Constant(3))
+def notify_agent(command_id: str) -> None:
+    command = Command.objects.get(id=command_id)
+    if command.is_terminal:
+        return  # someone already handled it; a no-op is success
+    agent_channel.send(command.id)
+```
+
+The decorator returns your function untouched. It stays directly callable and directly
+testable — `notify_agent("abc")` in a unit test runs the body with no framework
+involved.
+
+### 3. Wire the transport
+
+Same module, so the worker and the dispatcher agree on the task name:
+
+```python
+# myapp/tasks.py (continued)
+from huey import RedisHuey
+from dewey.adapters.huey import HueyAdapter
+from dewey.django import process_task
+
+huey = RedisHuey("myapp", url="redis://localhost:6379/0")
+adapter = HueyAdapter(huey)
+adapter.register(process_task)
+```
+
+### 4. Create work
+
+```python
+from django.db import transaction
+from dewey.django import create_task
+
+with transaction.atomic():
+    command = Command.objects.create(...)
+    create_task(task_type="agent.notify", args=[str(command.id)])
+```
+
+If the block rolls back, the task row and its wake-up go with it. Postgres holds the
+notification until commit, so there is no window in which a dispatcher can see work that
+never happened — and no `on_commit` callback for you to remember.
+
+### 5. Run the processes
+
+```bash
+python manage.py dewey_dispatcher      # claims rows, dispatches IDs, runs the sweep
+huey_consumer myapp.tasks.huey         # processes task IDs
+```
+
+Both are ordinary long-running processes. Run more than one dispatcher if you like:
+`SKIP LOCKED` makes them cooperate without a leader election.
+
+Useful flags while getting oriented:
+
+```bash
+python manage.py dewey_dispatcher --once                     # one pass, then exit
+python manage.py dewey_dispatcher --queues critical,default  # serve specific queues
+python manage.py dewey_dispatcher --idle-poll 1              # tighter poll for local dev
+```
+
+### Settings reference
+
+```python
+DEWEY = {
+    "DISPATCH": "myapp.tasks.adapter.dispatch",  # required
+    "QUEUES": None,                    # None serves every queue
+    "BATCH_SIZE": 100,                 # rows claimed per round trip
+    "IDLE_POLL_SECONDS": 5.0,          # max wait before polling anyway
+    "SWEEP_INTERVAL_SECONDS": 60.0,    # None disables recovery — see the warning below
+    "DISPATCH_TIMEOUT_SECONDS": 300,   # must exceed your worst-case broker backlog
+    "STUCK_THRESHOLD_MINUTES": 10,     # PROCESSING older than this is presumed abandoned
+    "SWEEP_LIMIT": 100,
+    "DATABASE": "default",             # alias, for a dedicated Dewey connection
+}
+```
+
+A misspelled key raises `ImproperlyConfigured` at startup rather than being silently
+ignored.
+
+> **The dispatcher owns the sweep.** `FAILED → PENDING` is a sweep transition, so with
+> `SWEEP_INTERVAL_SECONDS` set to `None` and nothing else calling `sweep()`, failed
+> tasks never retry.
+
+---
+
+## SQLAlchemy (sync)
+
+### 1. Create the schema
+
+```python
+from sqlalchemy import create_engine
+from dewey.sqlalchemy import Base
+
+engine = create_engine("postgresql://localhost/myapp")
+Base.metadata.create_all(engine)  # or generate an Alembic revision from it
+```
+
+### 2. Declare a task and wire the transport
+
+```python
+# myapp/tasks.py
+import dewey
+from huey import RedisHuey
+from sqlalchemy.orm import Session
+from dewey.adapters.huey import HueyAdapter
+from dewey.sqlalchemy import process_task
+
+@dewey.task("invoice.send", max_attempts=3)
+def send_invoice(invoice_id: int) -> None:
+    with Session(engine) as session:
+        invoice = session.get(Invoice, invoice_id)
+        mailer.send(invoice.email, invoice.pdf_url)
+
+huey = RedisHuey("myapp")
+adapter = HueyAdapter(huey)
+
+def _process(task_id: str) -> bool:
+    with Session(engine) as session:
+        return process_task(session, task_id)
+
+adapter.register(_process)
+```
+
+Give the worker its own session. `process_task` commits at each phase of the two-phase
+commit, so it must not share a session with request handling.
+
+### 3. Create work
+
+```python
+from dewey.sqlalchemy import create_task
+
+with Session(engine) as session:
+    invoice = Invoice(...)
+    session.add(invoice)
+    session.flush()
+    create_task(session, task_type="invoice.send", args=[invoice.id])
+    session.commit()
+```
+
+### 4. Run the dispatcher
+
+```python
+# dispatcher.py
+from dewey.dispatcher import Dispatcher
+from dewey.sqlalchemy.dispatch import SQLAlchemyDispatchBackend
+from myapp.tasks import adapter, engine
+
+dispatcher = Dispatcher(SQLAlchemyDispatchBackend(engine), adapter.dispatch)
+dispatcher.run()
+```
+
+For clean shutdown under a process manager:
+
+```python
+import signal
+for name in ("SIGINT", "SIGTERM"):
+    signal.signal(getattr(signal, name), lambda *_: dispatcher.stop())
+dispatcher.run()
+```
+
+### Tuning
+
+```python
+Dispatcher(
+    backend,
+    adapter.dispatch,
+    batch_size=100,
+    idle_poll_seconds=5.0,      # LISTEN shortens this; it is not needed for correctness
+    sweep_interval_seconds=60.0,
 )
 
-# Enqueue to your broker
-adapter.enqueue(task.id, queue=task.queue, priority=task.priority)
-```
-
-Note: the Django API doesn't take a `session` parameter — Django manages its own database connections.
-
-### 3. Process tasks in your worker
-
-```python
-from dewey.django.executor import process_task
-
-def my_handler(task_type: str, payload: dict):
-    if task_type == "order.confirmed":
-        send_confirmation_email(payload["order_id"])
-
-def worker_process(task_id: str):
-    process_task(task_id, handler=my_handler)
-```
-
-`process_task` uses two short `transaction.atomic` sections: one to claim the row with `SELECT FOR UPDATE` and commit `PENDING → PROCESSING`, then another to finalize `PROCESSING → COMPLETED/FAILED/DEAD` after the handler returns. The handler itself does not run while holding the row lock.
-
-### 4. Set up the sweep
-
-```python
-from dewey.django.sweep import sweep
-
-# Call every ~5 minutes from a periodic task
-result = sweep()
-for task_id in result["failed"] + result["stuck"]:
-    adapter.enqueue(task_id)
-```
-
-### 5. Query the ledger
-
-```python
-from dewey.django.queries import (
-    get_stats, get_failed, retry_task, kill_task, purge_completed,
+SQLAlchemyDispatchBackend(
+    engine,
+    queues=["critical"],        # None serves every queue
+    dispatch_timeout_seconds=300,
+    stuck_threshold_minutes=10,
 )
-
-stats = get_stats()
-failed = get_failed(task_type="order.confirmed")
-retry_task(task_id="abc-123")
-kill_task(task_id="def-456")
-purge_completed(older_than_days=30)
 ```
+
+---
+
+## SQLAlchemy (async)
+
+Producers and workers have async equivalents:
+
+```python
+import dewey
+from dewey.sqlalchemy import create_task_async, process_task_async
+
+@dewey.task("invoice.send", max_attempts=3)
+async def send_invoice(invoice_id: int) -> None:
+    async with AsyncSession(async_engine) as session:
+        invoice = await session.get(Invoice, invoice_id)
+        await mailer.send(invoice.email)
+
+async with AsyncSession(async_engine) as session:
+    await create_task_async(session, task_type="invoice.send", args=[invoice.id])
+    await session.commit()
+```
+
+An async handler needs an async worker: register a `process_fn` that drives
+`process_task_async` on your loop. Async handlers are awaited by `process_task_async`,
+not by the sync `process_task`.
+
+The dispatcher itself is synchronous. Run it in its own process (the usual choice), or
+in a thread beside your event loop:
+
+```python
+import threading
+
+threading.Thread(target=dispatcher.run, daemon=True).start()
+```
+
+For low-latency async setups, `dewey.sqlalchemy.listen.AsyncPostgresWorkListener`
+(asyncpg) provides LISTEN inside an existing event loop.
+
+---
+
+## Without a broker
+
+The transport is just a function that takes a task ID. In a single process, that can be
+the worker itself:
+
+```python
+from dewey.dispatcher import Dispatcher
+from dewey.sqlalchemy.dispatch import SQLAlchemyDispatchBackend
+
+def dispatch_in_process(task_id: str) -> None:
+    with Session(engine) as session:
+        process_task(session, task_id)
+
+Dispatcher(SQLAlchemyDispatchBackend(engine), dispatch_in_process).run()
+```
+
+You keep durability, retries, scheduling and the sweep. You give up parallelism and
+process isolation, and a handler crash takes the dispatcher down with it. Fine for small
+deployments and local development; add a broker when you want workers to scale or fail
+independently.
+
+---
+
+## Verifying it works
+
+```python
+from dewey.django import get_stats  # or dewey.sqlalchemy.get_stats(session)
+
+get_stats()
+# {'pending': 3, 'dispatching': 1, 'processing': 2, 'completed': 4891, 'failed': 0, 'dead': 1}
+```
+
+Or straight from psql, which is rather the point of keeping the backlog in Postgres:
+
+```sql
+SELECT status, count(*) FROM task_entries GROUP BY status;
+SELECT task_type, error, attempts FROM task_entries WHERE status = 'dead';
+```
+
+## Next
+
+- [Concepts](concepts.md) — what each state means, how claims work, what Dewey does and
+  does not guarantee
+- [From Huey or Celery](onboarding/from-huey-celery.md) — migrating existing tasks
+- [Query API](query-api.md) — operational queries and manual intervention

@@ -1,6 +1,14 @@
 # Notifications
 
-## Notifications
+> **Experimental.** This layer is not covered by the stability expectations that apply to
+> the rest of Dewey, and it may change shape or be replaced in a later release. It is a
+> second ledger with its own state machine and its own sweep, and it predates the
+> dispatcher: notifications are **not** dispatcher-driven and have no `DISPATCHING` state.
+>
+> The open question is whether a notification should simply *be* a task — a task type
+> whose handler sends through a channel, using `TaskPolicy` for retries instead of a
+> parallel retry engine. Until that is settled, treat this as useful but unfrozen, and
+> build anything load-bearing on the task API.
 
 Dewey includes a notification layer that tracks delivery of messages through channels (email, webhook, Slack, etc.) with per-attempt tracking, retry, and dead-lettering.
 

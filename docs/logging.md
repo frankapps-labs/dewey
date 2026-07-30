@@ -1,5 +1,23 @@
 # Logging and trace context
 
+## What Dewey logs, and where
+
+| Logger | Emits |
+|---|---|
+| `dewey.dispatcher` | claim/dispatch counts, transport failures and backoff, sweep results, start and stop |
+| `dewey.sqlalchemy.executor` / `dewey.django.executor` | task created, claimed, completed, failed with attempt counts and the next retry time |
+| `dewey.sqlalchemy.dispatch` / `dewey.django.dispatch` | LISTEN availability, degradation to polling |
+| `dewey.listen_sync` | listen connection lifecycle |
+| `dewey.adapters.huey` | processor registration |
+
+Every task-level line carries `id=` and `type=`, and failure lines carry `attempts=`,
+`retry_at=` and `reason=` — so `reason=non-retryable` versus `reason=attempts exhausted`
+distinguishes "the handler said never" from "the budget ran out" without reading code.
+
+A dispatch failure logs at WARNING with how many claims were returned to `PENDING`, and
+recovery logs once at INFO ("Transport recovered"). Those two lines bound a broker outage
+in your logs.
+
 ## Logging & trace context
 
 Dewey is a library, not a framework — it never configures logging. Every

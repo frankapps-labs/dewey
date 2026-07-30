@@ -6,12 +6,28 @@ on:
   pull_request:
     branches: [main]
 
+env:
+  # Dewey's suite talks to a real Postgres on purpose: FOR UPDATE SKIP LOCKED,
+  # partial indexes, LISTEN/NOTIFY and committed claims cannot be proven otherwise.
+  DEWEY_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/dewey_test
+  DEWEY_TEST_DATABASE_URL_ASYNC: postgresql+asyncpg://postgres:postgres@localhost:5432/dewey_test
+  DEWEY_TEST_REDIS_URL: redis://localhost:6379/0
+
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
+        django-version: [""]
+        include:
+          # The oldest and newest supported Django, pinned explicitly. Without this
+          # the matrix only ever tests whatever the resolver picks.
+          - python-version: "3.12"
+            django-version: "4.2"
+          - python-version: "3.12"
+            django-version: "5.1"
 
     services:
       postgres:
@@ -27,10 +43,15 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-
-    env:
-      DEWEY_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/dewey_test
-      DEWEY_TEST_DATABASE_URL_ASYNC: postgresql+asyncpg://postgres:postgres@localhost:5432/dewey_test
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - uses: actions/checkout@v4
@@ -45,6 +66,15 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --all-extras --dev
+
+      - name: Pin Django ${{ matrix.django-version }}
+        if: matrix.django-version != ''
+        run: uv pip install "Django~=${{ matrix.django-version }}.0"
+
+      - name: Report the versions actually under test
+        run: |
+          uv run python -c "import django, sys; print('python', sys.version)"
+          uv run python -c "import django; print('django', django.get_version())"
 
       - name: Run linting
         run: uv run ruff check src/ tests/
@@ -75,10 +105,15 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-
-    env:
-      DEWEY_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/dewey_test
-      DEWEY_TEST_DATABASE_URL_ASYNC: postgresql+asyncpg://postgres:postgres@localhost:5432/dewey_test
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - uses: actions/checkout@v4
@@ -106,6 +141,60 @@ jobs:
         uses: coverallsapp/github-action@v2
         with:
           file: coverage.lcov
+
+  wheel-smoke:
+    # Builds the wheel, installs it into a clean virtualenv, and runs the full
+    # producer -> dispatcher -> Huey worker path against real Postgres and Redis.
+    # This is what catches packaging mistakes the in-repo suite cannot see.
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dewey_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build the wheel
+        run: uv build
+
+      - name: Check package metadata
+        run: uvx twine check dist/*
+
+      - name: Inspect wheel contents
+        run: |
+          python -m zipfile -l dist/*.whl
+
+      - name: Run the installed-wheel smoke test
+        run: ./scripts/wheel_smoke.sh
 
   build:
     runs-on: ubuntu-latest

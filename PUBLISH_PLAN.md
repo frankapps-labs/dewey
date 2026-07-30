@@ -13,7 +13,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
   - `dewey[async]` = SQLAlchemy asyncio support
   - `dewey[django]` = Django ORM integration
   - `dewey[huey]` = Huey adapter
-  - `dewey[celery]` = Celery adapter
+  - (`dewey[celery]` removed for 0.4.0 — Huey is the only advertised transport)
 - [x] No `fastapi` extra unless Dewey imports FastAPI directly. FastAPI usage is `dewey[sqlalchemy,async]` plus docs.
 - [x] Switch type checker from mypy to basedpyright for Dewey. Real SQLAlchemy `Sequence` annotations fixed; Django ORM dynamics suppressed via per-directory executionEnvironment (intractable without django-stubs, and only affects Dewey's internal Django code — consumers' Django code is unaffected). `uv run basedpyright` reports 0 errors.
 - [x] basedpyright is the default type checker for Dewey.
@@ -37,6 +37,8 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 - [x] CI matrix: Python 3.11, 3.12, 3.13.
 - [x] CI commands use uv consistently.
 - [x] CI runs lint, format check, typecheck, tests, build.
+- [x] CI adds a Redis service, explicit Django 4.2 and 5.1 matrix entries, and an
+      installed-wheel smoke job.
 
 ## Phase 3 — First-release architecture: dispatcher
 
@@ -46,15 +48,18 @@ worker-pool transports.
 
 - [x] Introduce the `DispatcherAdapter` protocol (`register(process_fn)` +
       `dispatch(task_id)`) and contract tests.
-- [ ] Make existing Huey and Celery adapters conform to `DispatcherAdapter`.
-- [ ] Add the Dewey dispatcher loop: claim ready task rows, transition through
-      dispatch-visible state, call `adapter.dispatch(task_id)`, and recover
-      abandoned dispatch/processing rows.
-- [ ] Ensure dispatch wake-up works with the existing LISTEN/NOTIFY helpers,
-      while polling remains a safe fallback.
-- [ ] Add sync and async tests for claim/dispatch/reclaim behavior.
-- [ ] Document the broker relationship: Redis/RabbitMQ/etc. are accelerators /
-      worker-pool transports, not the durable source of truth.
+- [x] Huey conforms to `DispatcherAdapter` (`register`/`dispatch`, `retries=0`).
+      Celery is removed from this release; the pre-inversion adapter is archived on
+      the `archive/celery-adapter-enqueue-era` branch.
+- [x] Dewey dispatcher loop: claim with `FOR UPDATE SKIP LOCKED`, commit as
+      `DISPATCHING`, call `adapter.dispatch(task_id)`, reclaim abandoned
+      dispatch/processing rows, and run the sweep tick.
+- [x] Dispatch wake-up via LISTEN on psycopg2 and psycopg3, with polling as the
+      correctness path rather than a fallback.
+- [x] Tests for claim/dispatch/reclaim, including multi-dispatcher concurrency
+      against real Postgres and transport-failure release.
+- [x] Documented the broker relationship: transports carry task IDs; Postgres is the
+      durable source of truth (`docs/adapters.md`, `docs/concepts.md`).
 
 ## Phase 4 — First-release architecture: TaskPolicy chain
 
@@ -62,36 +67,46 @@ Task behavior should be declared in a Dewey policy registry, not scattered
 across broker decorators. Producers create task rows by type; handlers stay
 small, bounded, and dumb.
 
-- [ ] Add `TaskPolicy`, backoff policy types, policy registry, and resolver.
-- [ ] Add `@dewey.task(...)` as policy registration sugar.
-- [ ] Add producer API: `create_task(task_type, args=..., kwargs=..., ...)`.
-- [ ] Add typed handler outcomes/exceptions, including `RetryAfter(...)`.
-- [ ] Implement policy precedence: code defaults, project config, row-specific
-      scheduling/priority where appropriate.
-- [ ] Add Tier-1 lifecycle hooks needed for task state transitions and latency
-      payloads.
-- [ ] Update public docs around task creation, handler shape, retry policy,
-      scheduling, and broker migration.
+- [x] `TaskPolicy`, `Constant`/`Exponential`/`Custom` backoff, process-local
+      registry, and resolver.
+- [x] `@dewey.task(...)` registers the handler and its policy, returning the
+      function untouched.
+- [x] Producer API: `create_task(task_type, args=..., kwargs=..., ...)`, with
+      arguments persisted as explicit `args`/`kwargs` columns.
+- [x] Typed errors: `TransientError`, `NonRetryableError`, `RetryAfter(n)` floored at
+      the policy backoff.
+- [x] Precedence: `TASK_DEFAULTS` < decorator < `configure_policies(...)`. DB runtime
+      overrides remain a documented future boundary.
+- [ ] Tier-1 lifecycle hooks — deferred past 0.4.0; no consumer needs them yet and
+      the latency payload wants `queue_ms`/`handler_ms` designed together.
+- [x] Public docs rewritten around declare / create / dispatch / work, plus
+      `docs/onboarding/from-huey-celery.md`.
 
-## Phase 5 — First-release safety checks
+## Phase 5 — Safety checks (deferred past 0.4.0)
 
-First release should include policy-level safety checks, but not the full
-runtime/source-lint surface. The goal is to make unsafe task shape reviewable
-without blocking launch on dashboards or static analysis.
+**Deferred by decision.** The first release ships the narrow Tier-1 policy surface —
+execution, retry, failure classification — and nothing else. Safety metadata and
+`dewey check` would add a second, larger policy vocabulary before the core one has
+been used in production by anyone, which is the wrong order. `docs/concepts.md`
+states plainly what Dewey does not guarantee (bounded batches, resumability,
+idempotent side effects, timeouts) so the boundary is documented even though the
+tooling is not built.
 
-- [ ] Add TaskPolicy safety metadata: `expected_runtime_s`,
+Revisit for 0.5 once a real consumer has run 0.4 in production.
+
+- [~] (deferred) Add TaskPolicy safety metadata: `expected_runtime_s`,
       `stuck_threshold_s`, `batch_size`, `batch_size_required`, `resumable`,
       `idempotency_required`, `idempotency_key`, `concurrency_key`,
       `concurrency_limit`, `drain_mode`, and `safety_notes`.
-- [ ] Add pure validator API:
+- [~] (deferred) Add pure validator API:
       `validate_task_policy(policy, runtime_config) -> list[SafetyFinding]`.
-- [ ] Add CLI: `dewey check` with human-readable output.
-- [ ] Add CI-friendly output: `dewey check --format json`.
-- [ ] Default behavior: errors exit non-zero; warnings exit non-zero only with
+- [~] (deferred) Add CLI: `dewey check` with human-readable output.
+- [~] (deferred) Add CI-friendly output: `dewey check --format json`.
+- [~] (deferred) Default behavior: errors exit non-zero; warnings exit non-zero only with
       `--strict`.
-- [ ] Add `docs/task-safety.md` with safe/unsafe examples and the boundary
+- [~] (deferred) Add `docs/task-safety.md` with safe/unsafe examples and the boundary
       between Dewey guarantees and handler responsibilities.
-- [ ] Defer runtime safety scoring, source/AST linting, dashboard/admin UX, and
+- [~] (deferred) Defer runtime safety scoring, source/AST linting, dashboard/admin UX, and
       richer partition/fairness primitives until after real usage.
 
 ## Phase 6 — Local integration infra and installed-wheel smoke
@@ -100,16 +115,16 @@ Keep the published package lean. Integration examples/tests should validate the
 installed package without shipping a full example app inside the distribution.
 
 - [x] Remove the repo-local FastAPI example to keep the published package lean.
-- [ ] Add `docker-compose.yml` at repo root with Postgres and Redis for full
-      test matrix.
-- [ ] Add Make targets: `up`, `down`, `test-db`, `test-integration`.
-- [ ] Document local setup and env vars.
-- [ ] Build wheel in CI.
-- [ ] Install wheel into a fresh env.
-- [ ] Smoke-import core modules and extras modules.
-- [ ] Add installed-wheel Postgres task create/dispatch/process smoke test.
-- [ ] Add optional Huey/Celery transport smoke tests once adapters conform to
-      `DispatcherAdapter`.
+- [x] `docker-compose.yml` with Postgres and Redis on offset ports (55440/56390).
+- [x] Make targets: `up`, `down`, `test-integration`, `wheel-smoke`.
+- [x] Local setup and env vars documented in README and CONTRIBUTING.
+- [x] Wheel built in CI, with `twine check` and a contents listing.
+- [x] Wheel installed into a fresh virtualenv, asserting the import resolves to
+      site-packages rather than the source tree.
+- [x] Smoke-imports for core and every advertised extra.
+- [x] Installed-wheel end-to-end: migrate, create, dispatch, process, complete.
+- [x] Huey/Redis smoke including duplicate delivery, broker outage and recovery,
+      rolled-back producer, and retry-then-dead-letter.
 
 ## Phase 7 — Django production readiness
 
@@ -117,19 +132,21 @@ Django remains supported, but Django-specific operational polish does not block
 the first public pre-release unless a Django consumer becomes the first
 integration target.
 
-- [ ] Add initial Django migrations for task and notification models.
-      (Deferred until the first tagged release — pre-release setups use
-      `Base.metadata.create_all` / `makemigrations` against a fresh DB.)
-- [ ] Verify `python manage.py migrate` in a minimal Django app.
-- [ ] Smoke-test `dewey[django]` from built wheel.
-- [ ] Defer Django admin and management commands unless needed before 1.0.
+- [x] Initial Django migrations for task and notification models, shipped in the
+      wheel, with a test that fails if models and migrations drift.
+- [x] `python manage.py migrate` verified on a fresh database, plus rollback and
+      reapply, and the partial-index DDL inspected in real Postgres.
+- [x] `dewey[django]` smoke-tested from the built wheel.
+- [x] Added `manage.py dewey_dispatcher` — a consumer needs a supported way to run
+      the dispatcher. Django admin remains deferred.
 
 ## Phase 8 — Changelog/version/release polish
 
-- [x] Create the `[0.3.0] - Unreleased` changelog section for the dispatcher
-      architecture branch.
-- [ ] Keep appending dispatcher, TaskPolicy, and safety-check changes to the
-      `[0.3.0] - Unreleased` block.
+- [x] Changelog section is `[0.4.0] - Unreleased`. `0.3.0` cannot be published:
+      PyPI's `dewey` project already carries `0.3` and `0.3.0` from the original
+      project, and PyPI never permits reusing a version string.
+- [x] Dispatcher and TaskPolicy changes recorded there. Safety checks are deferred
+      (Phase 5).
 - [ ] Date-stamp changelog at tag time.
 - [ ] Define 1.0 release gate in README/changelog notes: at least one real
       consumer must validate the public API before `1.0`.
