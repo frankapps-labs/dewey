@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import uuid
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from django.db import models
 
 from dewey.core.notifications import NotificationStatus
+from dewey.django.models import new_uuid, utcnow
 
 if TYPE_CHECKING:
     from dewey.core.notifications import NotificationAttempt as NotificationAttemptDC
@@ -30,9 +29,7 @@ class NotificationEntry(models.Model):
         FAILED = NotificationStatus.FAILED.value, "Failed"
         DEAD = NotificationStatus.DEAD.value, "Dead"
 
-    id = models.CharField(
-        max_length=36, primary_key=True, default=lambda: str(uuid.uuid4()), editable=False
-    )
+    id = models.CharField(max_length=36, primary_key=True, default=new_uuid, editable=False)
 
     # Optional link to the task that triggered this notification
     task_id = models.CharField(max_length=36, null=True, blank=True, db_index=True)
@@ -62,7 +59,7 @@ class NotificationEntry(models.Model):
     error = models.TextField(default="", blank=True)
 
     # Timestamps
-    created_at = models.DateTimeField(default=lambda: datetime.now(UTC), db_index=True)
+    created_at = models.DateTimeField(default=utcnow, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
     scheduled_for = models.DateTimeField(null=True, blank=True)
     sent_at = models.DateTimeField(null=True, blank=True)
@@ -72,7 +69,7 @@ class NotificationEntry(models.Model):
         indexes = [
             models.Index(
                 fields=["scheduled_for"],
-                name="ix_notif_pending_pa",
+                name="ix_notif_pending_sched",
                 condition=models.Q(status="pending"),
             ),
             models.Index(
@@ -82,7 +79,7 @@ class NotificationEntry(models.Model):
             ),
             models.Index(
                 fields=["scheduled_for"],
-                name="ix_notif_failed_pa",
+                name="ix_notif_failed_sched",
                 condition=models.Q(status="failed"),
             ),
             models.Index(
@@ -129,9 +126,7 @@ class NotificationAttempt(models.Model):
     Every send attempt — success or failure — is logged here for audit.
     """
 
-    id = models.CharField(
-        max_length=36, primary_key=True, default=lambda: str(uuid.uuid4()), editable=False
-    )
+    id = models.CharField(max_length=36, primary_key=True, default=new_uuid, editable=False)
     notification = models.ForeignKey(
         NotificationEntry,
         on_delete=models.CASCADE,
@@ -141,7 +136,7 @@ class NotificationAttempt(models.Model):
     status = models.CharField(max_length=20)  # "sent" or "failed"
     error = models.TextField(default="", blank=True)
     response_data = models.JSONField(default=dict, blank=True)
-    created_at = models.DateTimeField(default=lambda: datetime.now(UTC))
+    created_at = models.DateTimeField(default=utcnow)
 
     class Meta:
         db_table = "notification_attempts"

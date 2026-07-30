@@ -1,18 +1,29 @@
-"""Tests for the Huey adapter — uses SqliteHuey(immediate=True) as in-memory backend."""
+"""Tests for the Huey adapter — transport only, no scheduling authority.
+
+Uses ``SqliteHuey(immediate=True)`` so tasks execute synchronously: no Redis and
+no consumer process needed to prove the contract.
+"""
 
 import logging
-from datetime import UTC
+import uuid
+from pathlib import Path
 
 import pytest
 from huey import SqliteHuey
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
+from dewey.adapters.base import DispatcherAdapter
 from dewey.adapters.huey import HueyAdapter
+from dewey.core.states import TaskStatus
+from dewey.sqlalchemy.executor import create_task, process_task
+from dewey.sqlalchemy.models import TaskEntryModel
 
 
 @pytest.fixture
-def huey():
-    """Huey instance in immediate mode — tasks execute synchronously, no Redis needed."""
-    return SqliteHuey(filename="/tmp/test_dewey_huey.db", immediate=True)
+def huey(tmp_path: Path):
+    """Immediate-mode Huey. Unique file per test so registrations cannot leak."""
+    return SqliteHuey(filename=str(tmp_path / f"huey-{uuid.uuid4().hex}.db"), immediate=True)
 
 
 @pytest.fixture
@@ -20,205 +31,124 @@ def adapter(huey):
     return HueyAdapter(huey)
 
 
-class TestSetup:
-    def test_setup_registers_process_task(self, adapter):
-        called_with = []
-        adapter.setup(process_fn=lambda tid: called_with.append(tid))
+class TestContract:
+    def test_satisfies_the_dispatcher_adapter_protocol(self, adapter):
+        assert isinstance(adapter, DispatcherAdapter)
 
-        assert adapter._process_task is not None
+    def test_registers_under_a_stable_task_name(self, huey):
+        """The name is the contract between the dispatcher and the worker pool."""
+        adapter = HueyAdapter(huey, task_name="custom_dewey_name")
+        adapter.register(lambda task_id: None)
+        registered = list(huey._registry._registry)
+        assert any(name.endswith(".custom_dewey_name") for name in registered), registered
 
-    def test_setup_registers_sweep_when_provided(self, adapter):
-        adapter.setup(
-            process_fn=lambda tid: None,
-            sweep_fn=lambda: "swept",
-        )
-        assert adapter._sweep_task is not None
+    def test_dispatch_hands_the_task_id_to_the_worker(self, adapter):
+        seen = []
+        adapter.register(lambda task_id: seen.append(task_id))
 
-    def test_setup_no_sweep_when_omitted(self, adapter):
-        adapter.setup(process_fn=lambda tid: None)
-        assert adapter._sweep_task is None
+        adapter.dispatch("task-abc")
 
+        assert seen == ["task-abc"]
 
-class TestEnqueue:
-    def test_enqueue_calls_process_fn(self, adapter):
-        called_with = []
-        adapter.setup(process_fn=lambda tid: called_with.append(tid))
+    def test_dispatch_before_register_explains_the_fix(self, adapter):
+        with pytest.raises(RuntimeError, match="register"):
+            adapter.dispatch("task-abc")
 
-        adapter.enqueue(task_id="task-abc-123")
+    def test_registering_twice_is_refused(self, adapter):
+        adapter.register(lambda task_id: None)
+        with pytest.raises(RuntimeError, match="twice"):
+            adapter.register(lambda task_id: None)
 
-        assert called_with == ["task-abc-123"]
+    def test_dewey_keeps_retry_authority(self, adapter, huey):
+        """Huey must not retry underneath Dewey, or a task runs twice."""
+        adapter.register(lambda task_id: None)
+        assert adapter._process_task.settings["default_retries"] == 0
+        task_class = huey._registry._registry[
+            next(n for n in huey._registry._registry if n.endswith(".dewey_process_task"))
+        ]
+        assert task_class.default_retries == 0
 
-    def test_enqueue_returns_result(self, adapter):
-        adapter.setup(process_fn=lambda tid: f"processed-{tid}")
-
-        result = adapter.enqueue(task_id="task-42")
-        # In immediate mode, Huey returns the result directly
-        assert result.get() == "processed-task-42"
-
-    def test_enqueue_multiple_tasks(self, adapter):
-        called_with = []
-        adapter.setup(process_fn=lambda tid: called_with.append(tid))
-
-        adapter.enqueue(task_id="task-1")
-        adapter.enqueue(task_id="task-2")
-        adapter.enqueue(task_id="task-3")
-
-        assert called_with == ["task-1", "task-2", "task-3"]
-
-    def test_enqueue_before_setup_raises(self, adapter):
-        with pytest.raises(RuntimeError, match="setup\\(\\) must be called before enqueue"):
-            adapter.enqueue(task_id="task-1")
-
-    def test_enqueue_non_default_queue_logs_warning(self, adapter, caplog):
-        adapter.setup(process_fn=lambda tid: None)
-
-        with caplog.at_level(logging.DEBUG):
-            adapter.enqueue(task_id="task-1", queue="critical")
-
-        assert "queue=critical is informational only" in caplog.text
-
-    def test_enqueue_nonzero_priority_logs_warning(self, adapter, caplog):
-        adapter.setup(process_fn=lambda tid: None)
-
-        with caplog.at_level(logging.DEBUG):
-            adapter.enqueue(task_id="task-1", priority=10)
-
-        assert "priority=10 is informational only" in caplog.text
-
-    def test_enqueue_default_queue_no_warning(self, adapter, caplog):
-        adapter.setup(process_fn=lambda tid: None)
-
-        with caplog.at_level(logging.DEBUG):
-            adapter.enqueue(task_id="task-1", queue="default", priority=0)
-
-        assert "informational only" not in caplog.text
+    def test_no_legacy_producer_api_remains(self, adapter):
+        assert not hasattr(adapter, "enqueue")
+        assert not hasattr(adapter, "enqueue_sweep")
+        assert not hasattr(adapter, "setup")
 
 
-class TestEnqueueSweep:
-    def test_enqueue_sweep_calls_sweep_fn(self, adapter):
-        sweep_calls = []
-        adapter.setup(
-            process_fn=lambda tid: None,
-            sweep_fn=lambda: sweep_calls.append("swept"),
-        )
+class TestDuplicateDelivery:
+    def test_a_second_delivery_of_a_finished_task_is_harmless(self, adapter, session, engine):
+        """Redis re-delivery, or a sweep racing a slow worker, must not re-run work."""
+        runs = []
 
-        adapter.enqueue_sweep()
+        def _process(task_id: str) -> bool:
+            with Session(engine) as worker_session:
+                return process_task(worker_session, task_id, lambda: runs.append(1))
 
-        assert sweep_calls == ["swept"]
+        adapter.register(_process)
 
-    def test_enqueue_sweep_without_sweep_fn_raises(self, adapter):
-        adapter.setup(process_fn=lambda tid: None)
+        task = create_task(session, task_type="test.duplicate")
+        session.commit()
 
-        with pytest.raises(RuntimeError, match="No sweep_fn was registered"):
-            adapter.enqueue_sweep()
+        adapter.dispatch(task.id)
+        adapter.dispatch(task.id)
 
-
-class TestProcessFnExceptions:
-    def test_handler_exception_wrapped_by_huey(self, adapter):
-        """Exceptions from process_fn are wrapped in Huey's TaskException."""
-        from huey.exceptions import TaskException
-
-        def failing_handler(tid):
-            raise ValueError(f"handler failed for {tid}")
-
-        adapter.setup(process_fn=failing_handler)
-
-        result = adapter.enqueue(task_id="task-bad")
-        # Huey wraps exceptions in TaskException in immediate mode
-        with pytest.raises(TaskException, match="handler failed for task-bad"):
-            result.get()
+        assert runs == [1]
+        updated = session.execute(
+            select(TaskEntryModel).where(TaskEntryModel.id == task.id)
+        ).scalar_one()
+        session.refresh(updated)
+        assert updated.status == TaskStatus.COMPLETED.value
+        assert updated.attempts == 1
 
 
-class TestIntegrationWithTaskledger:
-    """End-to-end: adapter → executor → DB, using immediate mode."""
+class TestFullLifecycle:
+    def test_dispatch_runs_the_registered_handler_and_completes_the_row(
+        self, adapter, session, engine
+    ):
+        handler_args = []
 
-    def test_full_lifecycle(self, adapter, engine):
-        """Create task in DB, enqueue via adapter, verify it gets processed."""
-        from sqlalchemy import select
-        from sqlalchemy.orm import Session
-
-        from dewey.core.states import TaskStatus
-        from dewey.sqlalchemy.executor import create_task, process_task
-        from dewey.sqlalchemy.models import TaskEntryModel
-
-        # Create a task in the DB
-        with Session(engine) as session:
-            task = create_task(session, task_type="test.huey", kwargs={"key": "val"})
-            session.commit()
-            task_id = task.id
-
-        # Wire up the adapter with a real process_fn
-        handler_calls = []
-
-        def my_handler(**kwargs):
-            handler_calls.append(kwargs)
-
-        def process_fn(tid):
-            with Session(engine) as session:
-                return process_task(session, tid, my_handler)
-
-        adapter.setup(process_fn=process_fn)
-
-        # Enqueue — in immediate mode, this processes synchronously
-        adapter.enqueue(task_id=task_id)
-
-        # Verify task completed in DB
-        with Session(engine) as session:
-            updated = session.execute(
-                select(TaskEntryModel).where(TaskEntryModel.id == task_id)
-            ).scalar_one()
-            assert updated.status == TaskStatus.COMPLETED.value
-            assert updated.attempts == 1
-
-        assert handler_calls == [{"key": "val"}]
-
-    def test_sweep_integration(self, adapter, engine):
-        """Sweep via adapter picks up failed tasks."""
-        from datetime import datetime, timedelta
-
-        from sqlalchemy import select, update
-        from sqlalchemy.orm import Session
-
-        from dewey.core.states import TaskStatus
-        from dewey.sqlalchemy.executor import create_task
-        from dewey.sqlalchemy.models import TaskEntryModel
-        from dewey.sqlalchemy.sweep import sweep
-
-        # Create a failed task ready for retry
-        with Session(engine) as session:
-            task = create_task(session, task_type="test.sweep.huey")
-            session.commit()
-            task_id = task.id
-
-        with Session(engine) as session:
-            session.execute(
-                update(TaskEntryModel)
-                .where(TaskEntryModel.id == task_id)
-                .values(
-                    status=TaskStatus.FAILED.value,
-                    scheduled_for=datetime.now(UTC) - timedelta(minutes=5),
-                    attempts=1,
+        def _process(task_id: str) -> bool:
+            with Session(engine) as worker_session:
+                return process_task(
+                    worker_session, task_id, lambda **kwargs: handler_args.append(kwargs)
                 )
-            )
-            session.commit()
 
-        # Wire up adapter with sweep
-        def sweep_fn():
-            with Session(engine) as session:
-                result = sweep(session)
-                session.commit()
-                return result
+        adapter.register(_process)
 
-        adapter.setup(
-            process_fn=lambda tid: None,
-            sweep_fn=sweep_fn,
-        )
+        task = create_task(session, task_type="test.huey", kwargs={"key": "val"})
+        session.commit()
 
-        adapter.enqueue_sweep()
+        adapter.dispatch(task.id)
 
-        # Task should be back to PENDING
-        with Session(engine) as session:
-            updated = session.execute(
-                select(TaskEntryModel).where(TaskEntryModel.id == task_id)
-            ).scalar_one()
-            assert updated.status == TaskStatus.PENDING.value
+        updated = session.execute(
+            select(TaskEntryModel).where(TaskEntryModel.id == task.id)
+        ).scalar_one()
+        session.refresh(updated)
+        assert updated.status == TaskStatus.COMPLETED.value
+        assert updated.attempts == 1
+        assert handler_args == [{"key": "val"}]
+
+    def test_a_failing_handler_leaves_dewey_in_charge_of_the_retry(
+        self, adapter, session, engine, caplog
+    ):
+        def _process(task_id: str) -> bool:
+            def boom() -> None:
+                raise ValueError("handler exploded")
+
+            with Session(engine) as worker_session:
+                return process_task(worker_session, task_id, boom)
+
+        adapter.register(_process)
+
+        task = create_task(session, task_type="test.huey", max_attempts=3)
+        session.commit()
+
+        with caplog.at_level(logging.WARNING):
+            adapter.dispatch(task.id)
+
+        updated = session.execute(
+            select(TaskEntryModel).where(TaskEntryModel.id == task.id)
+        ).scalar_one()
+        session.refresh(updated)
+        assert updated.status == TaskStatus.FAILED.value
+        assert updated.scheduled_for is not None  # Dewey scheduled the retry, not Huey
+        assert "handler exploded" in updated.error

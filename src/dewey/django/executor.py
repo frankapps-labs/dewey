@@ -18,11 +18,16 @@ from dewey.core.logging import (
 )
 from dewey.core.states import TaskStatus
 from dewey.core.types import TaskEntry as TaskEntryDC
+from dewey.django.listen import notify_work_available
 from dewey.django.models import TaskEntry
 from dewey.policy import resolve_policy
 from dewey.serialization import encode_args, encode_kwargs
 
 logger = logging.getLogger(__name__)
+
+# States a worker may claim from. PENDING covers in-process execution with no
+# broker in the path; DISPATCHING covers the normal dispatcher-driven flow.
+_CLAIMABLE = (TaskStatus.PENDING, TaskStatus.DISPATCHING)
 
 # Task handler: invoked as handler(*args, **kwargs) with the decoded task arguments.
 TaskHandler = Callable[..., Any]
@@ -62,6 +67,10 @@ def create_task(
         idempotency_key=idempotency_key,
     )
 
+    # Postgres holds the NOTIFY until this transaction commits, so a rollback
+    # cannot wake a dispatcher for a row that does not exist.
+    notify_work_available(kind="task", entry_id=str(task.id), queue=queue)
+
     logger.info("Task created id=%s type=%s queue=%s", task.id, task_type, queue)
     return task.to_dataclass()
 
@@ -75,14 +84,17 @@ def process_task(
     """
     Process a single task using two-phase commit.
 
-    `backoff` is an optional ``(attempts: int) -> timedelta`` function that
-    decides how long to wait before retrying a failed task. Defaults to
-    :func:`dewey.core.backoff.default_task_backoff` (2 min base, 1 hr cap).
-    Useful for fast-retry queues, custom strategies, or deterministic tests.
+    ``handler`` is optional: when omitted, the handler registered for the task type
+    with ``@dewey.task`` is used. Passing one explicitly overrides the registry —
+    the escape hatch for tests and in-process use.
+
+    Retry, dead-letter and backoff behaviour all come from the resolved policy.
+    ``backoff`` overrides the policy's backoff for this call, which is mostly useful
+    for deterministic tests.
 
     Two-phase commit:
 
-    Phase 1: PENDING → PROCESSING (committed — visible to sweep)
+    Phase 1: PENDING/DISPATCHING → PROCESSING (committed — visible to sweep)
     Phase 2: Run handler
     Phase 3: PROCESSING → COMPLETED/FAILED/DEAD (committed)
 
@@ -110,9 +122,12 @@ def process_task(
             logger.info("Task already terminal id=%s status=%s", task_id, task.status)
             return False
 
-        # Only process PENDING tasks
-        if current_status != TaskStatus.PENDING:
-            logger.info("Task not pending id=%s status=%s", task_id, task.status)
+        # Claimable from PENDING (in-process execution, no broker in the path) or
+        # DISPATCHING (a dispatcher already handed this ID to the transport).
+        # Anything else means another worker got there first, or an operator
+        # intervened — a duplicate delivery is a logged no-op, never an error.
+        if current_status not in _CLAIMABLE:
+            logger.info("Task not claimable id=%s status=%s", task_id, task.status)
             return False
 
         # Respect scheduled_for scheduling
@@ -128,8 +143,11 @@ def process_task(
         # Transition to PROCESSING
         task.status = TaskStatus.PROCESSING.value
         task.started_at = now
+        task.dispatching_at = None
         task.attempts += 1
-        task.save(update_fields=["status", "started_at", "attempts", "updated_at"])
+        task.save(
+            update_fields=["status", "started_at", "dispatching_at", "attempts", "updated_at"]
+        )
 
     # Cache values (task object still usable after atomic block exits)
     task_type = task.task_type

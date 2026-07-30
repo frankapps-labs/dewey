@@ -14,6 +14,17 @@ if TYPE_CHECKING:
     from dewey.core.types import TaskEntry as TaskEntryDC
 
 
+def new_uuid() -> str:
+    """Default row ID. A module-level function, because Django migrations have to be
+    able to serialise it — a lambda cannot be written into a migration file."""
+    return str(uuid.uuid4())
+
+
+def utcnow() -> datetime:
+    """Default creation timestamp, serialisable for the same reason."""
+    return datetime.now(UTC)
+
+
 class TaskEntry(models.Model):
     """
     Postgres-backed task ledger row.
@@ -30,9 +41,7 @@ class TaskEntry(models.Model):
         FAILED = TaskStatus.FAILED.value, "Failed"
         DEAD = TaskStatus.DEAD.value, "Dead"
 
-    id = models.CharField(
-        max_length=36, primary_key=True, default=lambda: str(uuid.uuid4()), editable=False
-    )
+    id = models.CharField(max_length=36, primary_key=True, default=new_uuid, editable=False)
     task_type = models.CharField(max_length=100, db_index=True)
     status = models.CharField(
         max_length=20,
@@ -56,7 +65,7 @@ class TaskEntry(models.Model):
     error = models.TextField(default="", blank=True)
 
     # Timestamps
-    created_at = models.DateTimeField(default=lambda: datetime.now(UTC), db_index=True)
+    created_at = models.DateTimeField(default=utcnow, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
     scheduled_for = models.DateTimeField(null=True, blank=True)
     dispatching_at = models.DateTimeField(null=True, blank=True)
@@ -78,31 +87,31 @@ class TaskEntry(models.Model):
             # Partial index: pending tasks ready to process
             models.Index(
                 fields=["scheduled_for"],
-                name="ix_task_entries_pending_pa",
+                name="ix_task_pending_sched",
                 condition=models.Q(status="pending"),
             ),
             # Partial index: rows a dispatcher claimed but no worker took
             models.Index(
                 fields=["dispatching_at"],
-                name="ix_task_entries_dispatching",
+                name="ix_task_dispatching",
                 condition=models.Q(status="dispatching"),
             ),
             # Partial index: stuck processing tasks
             models.Index(
                 fields=["started_at"],
-                name="ix_task_entries_processing_sa",
+                name="ix_task_processing_started",
                 condition=models.Q(status="processing"),
             ),
             # Partial index: failed tasks eligible for retry
             models.Index(
                 fields=["scheduled_for"],
-                name="ix_task_entries_failed_pa",
+                name="ix_task_failed_sched",
                 condition=models.Q(status="failed"),
             ),
             # Composite: recent tasks by type
             models.Index(
                 fields=["task_type", "created_at"],
-                name="ix_task_entries_type_created",
+                name="ix_task_type_created",
             ),
         ]
 

@@ -17,6 +17,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from sqlalchemy.orm import Session
 
+from dewey.listen_sync import work_payload
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_WORK_CHANNEL = "dewey_work_available"
@@ -37,7 +39,7 @@ def _is_postgresql_bind(bind: Any) -> bool:
 
 
 def _payload(kind: str, entry_id: str, queue: str | None = None) -> str:
-    return json.dumps({"kind": kind, "id": entry_id, "queue": queue}, separators=(",", ":"))
+    return work_payload(kind, entry_id, queue)
 
 
 def _parse_payload(payload: str) -> WorkNotification:
