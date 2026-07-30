@@ -144,11 +144,11 @@ class TestGetDead:
 @pytest.mark.django_db(transaction=True)
 class TestGetTask:
     def test_returns_task(self):
-        task = create_task(task_type="test.task", payload={"x": 1})
+        task = create_task(task_type="test.task", kwargs={"x": 1})
         result = get_task(task.id)
         assert result is not None
         assert result.task_type == "test.task"
-        assert result.payload == {"x": 1}
+        assert result.kwargs == {"x": 1}
 
     def test_returns_none_for_missing(self):
         assert get_task("nonexistent") is None

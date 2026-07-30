@@ -62,7 +62,7 @@ async def test_create_notification(async_session):
 
 @pytest.mark.asyncio
 async def test_create_notification_linked_to_task(async_session):
-    task = await create_task_async(async_session, task_type="order", payload={})
+    task = await create_task_async(async_session, task_type="order", kwargs={})
     await async_session.flush()
 
     notif = await create_notification_async(
@@ -318,7 +318,7 @@ async def test_get_pending_notifications_respects_scheduled_for(async_session):
 
 @pytest.mark.asyncio
 async def test_get_notifications_for_task(async_session):
-    task = await create_task_async(async_session, task_type="order", payload={})
+    task = await create_task_async(async_session, task_type="order", kwargs={})
     await async_session.flush()
 
     await create_notification_async(

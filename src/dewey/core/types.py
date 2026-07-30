@@ -16,7 +16,8 @@ class TaskEntry:
     id: str
     task_type: str
     status: TaskStatus
-    payload: dict[str, Any]
+    args: list[Any]
+    kwargs: dict[str, Any]
     queue: str
     priority: int
     attempts: int

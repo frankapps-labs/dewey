@@ -23,6 +23,13 @@ string to be reused.
   contract: `DispatcherAdapter`.
 
 ### Changed
+- **Breaking:** task rows persist handler arguments as explicit `args` (list) and
+  `kwargs` (dict) columns instead of a single `payload` dict, and handlers are now
+  invoked as `handler(*args, **kwargs)` instead of `handler(task_type, payload)`.
+  A task row now records a *function call* rather than a bag of data: handlers are
+  ordinary Python functions, a wrong argument list fails with a plain `TypeError`
+  before any side effect, and migrating a `f.delay(42)` / `f.delay(client_id=42)`
+  call site leaves the handler body untouched.
 - Renamed the scheduling column and Python attribute `process_after` → `scheduled_for`
   across SQLAlchemy models, Django models, dataclasses (`TaskEntry`,
   `NotificationEntry`), executor / sweep / query kwargs, and partial indexes

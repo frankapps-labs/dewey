@@ -143,15 +143,15 @@ class TestIntegrationWithTaskledger:
 
         # Create a task in the DB
         with Session(engine) as session:
-            task = create_task(session, task_type="test.huey", payload={"key": "val"})
+            task = create_task(session, task_type="test.huey", kwargs={"key": "val"})
             session.commit()
             task_id = task.id
 
         # Wire up the adapter with a real process_fn
         handler_calls = []
 
-        def my_handler(task_type, payload):
-            handler_calls.append((task_type, payload))
+        def my_handler(**kwargs):
+            handler_calls.append(kwargs)
 
         def process_fn(tid):
             with Session(engine) as session:
@@ -170,7 +170,7 @@ class TestIntegrationWithTaskledger:
             assert updated.status == TaskStatus.COMPLETED.value
             assert updated.attempts == 1
 
-        assert handler_calls == [("test.huey", {"key": "val"})]
+        assert handler_calls == [{"key": "val"}]
 
     def test_sweep_integration(self, adapter, engine):
         """Sweep via adapter picks up failed tasks."""

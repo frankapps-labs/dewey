@@ -40,8 +40,9 @@ class TaskEntry(models.Model):
         db_index=True,
     )
 
-    # Payload — JSONField uses Postgres JSONB
-    payload = models.JSONField(default=dict, blank=True)
+    # Handler arguments — JSONField uses Postgres JSONB
+    args = models.JSONField(default=list, blank=True)
+    kwargs = models.JSONField(default=dict, blank=True)
     metadata = models.JSONField(default=dict, blank=True)
 
     # Queue routing
@@ -108,7 +109,8 @@ class TaskEntry(models.Model):
             id=str(self.id),
             task_type=self.task_type,
             status=TaskStatus(self.status),
-            payload=self.payload,
+            args=self.args,
+            kwargs=self.kwargs,
             queue=self.queue,
             priority=self.priority,
             attempts=self.attempts,

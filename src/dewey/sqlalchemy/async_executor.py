@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -22,15 +22,16 @@ from dewey.sqlalchemy.models import TaskEntryModel
 
 logger = logging.getLogger(__name__)
 
-# Async handler: receives (task_type, payload) → awaitable result
-AsyncTaskHandler = Callable[[str, dict[str, Any]], Awaitable[Any]]
+# Async handler: awaited as handler(*args, **kwargs) with the decoded task arguments.
+AsyncTaskHandler = Callable[..., Awaitable[Any]]
 
 
 async def create_task_async(
     session: AsyncSession,
     *,
     task_type: str,
-    payload: dict[str, Any] | None = None,
+    args: Sequence[Any] | None = None,
+    kwargs: dict[str, Any] | None = None,
     queue: str = "default",
     priority: int = 0,
     max_attempts: int = 5,
@@ -41,14 +42,15 @@ async def create_task_async(
     """
     Write a task to the ledger. Async version of create_task().
 
-    After calling this, enqueue the task ID to your broker (Huey, Celery, etc.)
-    using the appropriate adapter.
+    The dispatcher picks the row up from Postgres — producers never talk to a
+    broker.
 
-    Returns the created TaskEntryModel (with .id for enqueue).
+    Returns the created TaskEntryModel (with .id).
     """
     task = TaskEntryModel(
         task_type=task_type,
-        payload=payload or {},
+        args=list(args or []),
+        kwargs=dict(kwargs or {}),
         queue=queue,
         priority=priority,
         max_attempts=max_attempts,
@@ -127,7 +129,8 @@ async def process_task_async(
 
     # Cache values before commit (objects expire after commit)
     task_type = task.task_type
-    payload = dict(task.payload)
+    task_args = list(task.args or [])
+    task_kwargs = dict(task.kwargs or {})
     attempts = task.attempts
     max_attempts = task.max_attempts
     task_metadata = dict(task.task_metadata or {})
@@ -141,7 +144,7 @@ async def process_task_async(
     try:
         # Phase 2: Execute async handler
         try:
-            await handler(task_type, payload)
+            await handler(*task_args, **task_kwargs)
         except Exception as exc:
             # Phase 3a: Mark failed or dead-lettered
             error_msg = str(exc)

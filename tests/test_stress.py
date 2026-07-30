@@ -29,7 +29,7 @@ class TestConcurrentSameTask:
         def worker():
             try:
                 with Session(engine) as s:
-                    result = process_task(s, task_id, lambda t, p: None)
+                    result = process_task(s, task_id, lambda **kw: None)
                     results.append(result)
             except Exception as e:
                 errors.append(e)
@@ -61,7 +61,7 @@ class TestConcurrentSameTask:
         def worker():
             with Session(engine) as s:
                 result = process_task(
-                    s, task_id, lambda t, p: (_ for _ in ()).throw(ValueError("boom"))
+                    s, task_id, lambda **kw: (_ for _ in ()).throw(ValueError("boom"))
                 )
                 results.append(result)
 
@@ -87,13 +87,13 @@ class TestConcurrentManyTasks:
         task_ids = []
         with Session(engine) as session:
             for i in range(100):
-                task = create_task(session, task_type="test.batch", payload={"i": i})
+                task = create_task(session, task_type="test.batch", kwargs={"i": i})
                 task_ids.append(task.id)
             session.commit()
 
         def worker(tid):
             with Session(engine) as s:
-                return process_task(s, tid, lambda t, p: None)
+                return process_task(s, tid, lambda **kw: None)
 
         with ThreadPoolExecutor(max_workers=10) as pool:
             futures = {pool.submit(worker, tid): tid for tid in task_ids}
@@ -149,7 +149,7 @@ class TestSweepStuckIntegration:
 
         # Process successfully
         with Session(engine) as session:
-            ok = process_task(session, task_id, lambda t, p: None)
+            ok = process_task(session, task_id, lambda **kw: None)
             assert ok is True
 
         with Session(engine) as session:
@@ -167,7 +167,7 @@ class TestSweepStuckIntegration:
         handler_started = threading.Event()
         handler_continue = threading.Event()
 
-        def slow_handler(task_type, payload):
+        def slow_handler(**kwargs):
             handler_started.set()
             handler_continue.wait(timeout=10)
 
@@ -227,7 +227,7 @@ class TestConcurrentSweepAndProcess:
         def run_process(tid):
             try:
                 with Session(engine) as s:
-                    process_task(s, tid, lambda t, p: None)
+                    process_task(s, tid, lambda **kw: None)
             except Exception as e:
                 errors.append(("process", tid, e))
 
@@ -261,13 +261,13 @@ class TestHighVolume:
         task_ids = []
         with Session(engine) as session:
             for i in range(500):
-                task = create_task(session, task_type="test.volume", payload={"i": i})
+                task = create_task(session, task_type="test.volume", kwargs={"i": i})
                 task_ids.append(task.id)
             session.commit()
 
         def worker(tid):
             with Session(engine) as s:
-                return process_task(s, tid, lambda t, p: None)
+                return process_task(s, tid, lambda **kw: None)
 
         with ThreadPoolExecutor(max_workers=20) as pool:
             results = list(pool.map(worker, task_ids))
@@ -296,7 +296,7 @@ class TestRetryLifecycle:
         # First attempt: fail
         with Session(engine) as session:
             result = process_task(
-                session, task_id, lambda t, p: (_ for _ in ()).throw(ValueError("fail1"))
+                session, task_id, lambda **kw: (_ for _ in ()).throw(ValueError("fail1"))
             )
             assert result is False
 
@@ -328,7 +328,7 @@ class TestRetryLifecycle:
 
         # Second attempt: succeed
         with Session(engine) as session:
-            result = process_task(session, task_id, lambda t, p: None)
+            result = process_task(session, task_id, lambda **kw: None)
             assert result is True
 
         with Session(engine) as session:
@@ -345,7 +345,7 @@ class TestRetryLifecycle:
 
         # Attempt 1: fail
         with Session(engine) as session:
-            process_task(session, task_id, lambda t, p: (_ for _ in ()).throw(ValueError("fail")))
+            process_task(session, task_id, lambda **kw: (_ for _ in ()).throw(ValueError("fail")))
 
         # Fast-forward and sweep
         with Session(engine) as session:
@@ -361,7 +361,7 @@ class TestRetryLifecycle:
 
         # Attempt 2: fail again → should die
         with Session(engine) as session:
-            process_task(session, task_id, lambda t, p: (_ for _ in ()).throw(ValueError("fail")))
+            process_task(session, task_id, lambda **kw: (_ for _ in ()).throw(ValueError("fail")))
 
         with Session(engine) as session:
             task = session.get(TaskEntryModel, task_id)

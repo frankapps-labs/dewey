@@ -45,13 +45,16 @@ class TaskEntryModel(Base):
         String(20), nullable=False, default=TaskStatus.PENDING.value, index=True
     )
 
-    # Payload — stored as JSON (works on all databases including SQLite).
-    # Dewey never queries inside these columns — they're passed through to handlers.
+    # Handler arguments — stored as JSON (works on all databases including SQLite).
+    # Dewey never queries inside these columns — they're decoded and splatted into
+    # the registered handler as ``handler(*args, **kwargs)``.
     #
     # To enable Postgres JSONB operators (->>, @>, GIN indexes):
-    #   ALTER TABLE task_entries ALTER COLUMN payload TYPE jsonb USING payload::jsonb;
+    #   ALTER TABLE task_entries ALTER COLUMN args TYPE jsonb USING args::jsonb;
+    #   ALTER TABLE task_entries ALTER COLUMN kwargs TYPE jsonb USING kwargs::jsonb;
     #   ALTER TABLE task_entries ALTER COLUMN metadata TYPE jsonb USING metadata::jsonb;
-    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    args: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    kwargs: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     task_metadata: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
 
     # Queue routing
@@ -78,7 +81,8 @@ class TaskEntryModel(Base):
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     __table_args__ = (
-        # Partial unique: idempotency only enforced when key is set
+        # Idempotency is only enforced when a key is set: Postgres treats NULLs as
+        # distinct, so rows without a key never collide with each other.
         UniqueConstraint(
             "task_type",
             "idempotency_key",

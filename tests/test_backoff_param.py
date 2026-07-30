@@ -42,11 +42,11 @@ class FailingChannel:
         return ChannelResult(success=False, error="boom")
 
 
-def always_fail(task_type, payload):
+def always_fail(**kwargs):
     raise RuntimeError("boom")
 
 
-async def always_fail_async(task_type, payload):
+async def always_fail_async(**kwargs):
     raise RuntimeError("boom")
 
 

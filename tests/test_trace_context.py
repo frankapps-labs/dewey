@@ -154,7 +154,7 @@ class TestSyncExecutorTrace:
     def test_handler_sees_trace_from_metadata(self, session):
         seen: dict[str, dict] = {}
 
-        def handler(task_type, payload):
+        def handler(**kwargs):
             seen["ctx"] = get_trace_context()
 
         task = create_task(session, task_type="t", metadata={"trace": {"request_id": "REQ-1"}})
@@ -168,7 +168,7 @@ class TestSyncExecutorTrace:
     def test_handler_no_trace_when_metadata_empty(self, session):
         seen: dict[str, dict] = {}
 
-        def handler(task_type, payload):
+        def handler(**kwargs):
             seen["ctx"] = get_trace_context()
 
         task = create_task(session, task_type="t")
@@ -187,7 +187,7 @@ class TestAsyncTrace:
     async def test_async_handler_sees_trace(self, async_session):
         seen: dict[str, dict] = {}
 
-        async def handler(task_type, payload):
+        async def handler(**kwargs):
             seen["ctx"] = get_trace_context()
 
         task = await create_task_async(
@@ -204,11 +204,11 @@ class TestAsyncTrace:
         # single-session test but interleaved via asyncio.gather and small sleeps).
         seen: dict[str, dict] = {}
 
-        async def handler_a(task_type, payload):
+        async def handler_a(**kwargs):
             await asyncio.sleep(0.05)
             seen["a"] = get_trace_context()
 
-        async def handler_b(task_type, payload):
+        async def handler_b(**kwargs):
             await asyncio.sleep(0.05)
             seen["b"] = get_trace_context()
 
@@ -242,7 +242,7 @@ class TestAsyncTrace:
             h.addFilter(f)
         try:
 
-            async def handler(task_type, payload):
+            async def handler(**kwargs):
                 return None  # success path → Phase 3b runs
 
             task = await create_task_async(

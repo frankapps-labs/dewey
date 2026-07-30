@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -22,15 +22,16 @@ from dewey.sqlalchemy.models import TaskEntryModel
 
 logger = logging.getLogger(__name__)
 
-# Type for task handler: receives (task_type, payload) → returns result dict or None
-TaskHandler = Callable[[str, dict[str, Any]], Any]
+# Task handler: invoked as handler(*args, **kwargs) with the decoded task arguments.
+TaskHandler = Callable[..., Any]
 
 
 def create_task(
     session: Session,
     *,
     task_type: str,
-    payload: dict[str, Any] | None = None,
+    args: Sequence[Any] | None = None,
+    kwargs: dict[str, Any] | None = None,
     queue: str = "default",
     priority: int = 0,
     max_attempts: int = 5,
@@ -41,14 +42,15 @@ def create_task(
     """
     Write a task to the ledger. This is step 1 — Postgres is the source of truth.
 
-    After calling this, enqueue the task ID to your broker (Huey, Celery, etc.)
-    using the appropriate adapter.
+    The dispatcher picks the row up from Postgres — producers never talk to a
+    broker.
 
-    Returns the created TaskEntryModel (with .id for enqueue).
+    Returns the created TaskEntryModel (with .id).
     """
     task = TaskEntryModel(
         task_type=task_type,
-        payload=payload or {},
+        args=list(args or []),
+        kwargs=dict(kwargs or {}),
         queue=queue,
         priority=priority,
         max_attempts=max_attempts,
@@ -133,7 +135,8 @@ def process_task(
 
     # Cache values before commit (objects expire after commit)
     task_type = task.task_type
-    payload = dict(task.payload)
+    task_args = list(task.args or [])
+    task_kwargs = dict(task.kwargs or {})
     attempts = task.attempts
     max_attempts = task.max_attempts
     task_metadata = dict(task.task_metadata or {})
@@ -147,7 +150,7 @@ def process_task(
     try:
         # Phase 2: Execute handler
         try:
-            handler(task_type, payload)
+            handler(*task_args, **task_kwargs)
         except Exception as exc:
             # Phase 3a: Mark failed or dead-lettered
             error_msg = str(exc)

@@ -130,13 +130,13 @@ class TestGetDead:
 
 class TestGetTask:
     def test_returns_task(self, session):
-        task = create_task(session, task_type="test.task", payload={"x": 1})
+        task = create_task(session, task_type="test.task", kwargs={"x": 1})
         session.flush()
 
         result = get_task(session, task.id)
         assert result is not None
         assert result.id == task.id
-        assert result.payload == {"x": 1}
+        assert result.kwargs == {"x": 1}
 
     def test_returns_none_for_missing(self, session):
         assert get_task(session, "nonexistent") is None

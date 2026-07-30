@@ -18,7 +18,7 @@ async def test_create_task_async_notifies_on_commit(async_engine, async_session)
         task = await create_task_async(
             async_session,
             task_type="scan",
-            payload={"url": "https://example.com"},
+            kwargs={"url": "https://example.com"},
             queue="critical",
         )
 
@@ -54,7 +54,7 @@ async def test_create_notification_async_notifies_on_commit(async_engine, async_
 
 @pytest.mark.asyncio
 async def test_retry_task_async_notifies_on_commit(async_engine, async_session):
-    task = await create_task_async(async_session, task_type="scan", payload={})
+    task = await create_task_async(async_session, task_type="scan", kwargs={})
     task.status = TaskStatus.FAILED.value
     task.scheduled_for = datetime.now(UTC) - timedelta(seconds=1)
     await async_session.commit()
@@ -72,7 +72,7 @@ async def test_retry_task_async_notifies_on_commit(async_engine, async_session):
 
 @pytest.mark.asyncio
 async def test_sweep_failed_async_notifies_on_commit(async_engine, async_session):
-    task = await create_task_async(async_session, task_type="scan", payload={})
+    task = await create_task_async(async_session, task_type="scan", kwargs={})
     task.status = TaskStatus.FAILED.value
     task.scheduled_for = datetime.now(UTC) - timedelta(seconds=1)
     await async_session.commit()

@@ -31,8 +31,8 @@ async def test_get_stats_empty(async_session):
 
 @pytest.mark.asyncio
 async def test_get_stats_with_tasks(async_session):
-    await create_task_async(async_session, task_type="a", payload={})
-    await create_task_async(async_session, task_type="b", payload={})
+    await create_task_async(async_session, task_type="a", kwargs={})
+    await create_task_async(async_session, task_type="b", kwargs={})
     await async_session.commit()
 
     stats = await get_stats_async(async_session)
@@ -41,9 +41,9 @@ async def test_get_stats_with_tasks(async_session):
 
 @pytest.mark.asyncio
 async def test_get_pending(async_session):
-    await create_task_async(async_session, task_type="scan", payload={"n": 1})
-    await create_task_async(async_session, task_type="scan", payload={"n": 2})
-    await create_task_async(async_session, task_type="report", payload={"n": 3})
+    await create_task_async(async_session, task_type="scan", kwargs={"n": 1})
+    await create_task_async(async_session, task_type="scan", kwargs={"n": 2})
+    await create_task_async(async_session, task_type="report", kwargs={"n": 3})
     await async_session.commit()
 
     all_pending = await get_pending_async(async_session)
@@ -55,7 +55,7 @@ async def test_get_pending(async_session):
 
 @pytest.mark.asyncio
 async def test_get_processing(async_session):
-    task = await create_task_async(async_session, task_type="scan", payload={})
+    task = await create_task_async(async_session, task_type="scan", kwargs={})
     await async_session.commit()
 
     row = await async_session.get(TaskEntryModel, task.id)
@@ -70,7 +70,7 @@ async def test_get_processing(async_session):
 
 @pytest.mark.asyncio
 async def test_get_stuck(async_session):
-    task = await create_task_async(async_session, task_type="scan", payload={})
+    task = await create_task_async(async_session, task_type="scan", kwargs={})
     await async_session.commit()
 
     row = await async_session.get(TaskEntryModel, task.id)
@@ -85,7 +85,7 @@ async def test_get_stuck(async_session):
 
 @pytest.mark.asyncio
 async def test_get_failed(async_session):
-    task = await create_task_async(async_session, task_type="scan", payload={})
+    task = await create_task_async(async_session, task_type="scan", kwargs={})
     await async_session.commit()
 
     row = await async_session.get(TaskEntryModel, task.id)
@@ -100,7 +100,7 @@ async def test_get_failed(async_session):
 
 @pytest.mark.asyncio
 async def test_get_dead(async_session):
-    task = await create_task_async(async_session, task_type="scan", payload={})
+    task = await create_task_async(async_session, task_type="scan", kwargs={})
     await async_session.commit()
 
     row = await async_session.get(TaskEntryModel, task.id)
@@ -113,13 +113,13 @@ async def test_get_dead(async_session):
 
 @pytest.mark.asyncio
 async def test_get_task(async_session):
-    task = await create_task_async(async_session, task_type="scan", payload={"x": 1})
+    task = await create_task_async(async_session, task_type="scan", kwargs={"x": 1})
     await async_session.commit()
 
     entry = await get_task_async(async_session, task.id)
     assert entry is not None
     assert entry.task_type == "scan"
-    assert entry.payload == {"x": 1}
+    assert entry.kwargs == {"x": 1}
 
 
 @pytest.mark.asyncio
@@ -130,8 +130,8 @@ async def test_get_task_not_found(async_session):
 
 @pytest.mark.asyncio
 async def test_get_recent(async_session):
-    await create_task_async(async_session, task_type="scan", payload={})
-    await create_task_async(async_session, task_type="report", payload={})
+    await create_task_async(async_session, task_type="scan", kwargs={})
+    await create_task_async(async_session, task_type="report", kwargs={})
     await async_session.commit()
 
     recent = await get_recent_async(async_session, limit=10)
@@ -143,7 +143,7 @@ async def test_get_recent(async_session):
 
 @pytest.mark.asyncio
 async def test_retry_failed_task(async_session):
-    task = await create_task_async(async_session, task_type="scan", payload={})
+    task = await create_task_async(async_session, task_type="scan", kwargs={})
     await async_session.commit()
 
     row = await async_session.get(TaskEntryModel, task.id)
@@ -161,7 +161,7 @@ async def test_retry_failed_task(async_session):
 
 @pytest.mark.asyncio
 async def test_retry_completed_task_is_noop(async_session):
-    task = await create_task_async(async_session, task_type="scan", payload={})
+    task = await create_task_async(async_session, task_type="scan", kwargs={})
     await async_session.commit()
 
     row = await async_session.get(TaskEntryModel, task.id)
@@ -176,7 +176,7 @@ async def test_retry_completed_task_is_noop(async_session):
 @pytest.mark.asyncio
 async def test_bulk_retry(async_session):
     for _ in range(3):
-        t = await create_task_async(async_session, task_type="scan", payload={})
+        t = await create_task_async(async_session, task_type="scan", kwargs={})
         await async_session.flush()
         row = await async_session.get(TaskEntryModel, t.id)
         row.status = TaskStatus.FAILED.value
@@ -194,7 +194,7 @@ async def test_bulk_retry_invalid_status_raises(async_session):
 
 @pytest.mark.asyncio
 async def test_kill_task(async_session):
-    task = await create_task_async(async_session, task_type="scan", payload={})
+    task = await create_task_async(async_session, task_type="scan", kwargs={})
     await async_session.commit()
 
     entry = await kill_task_async(async_session, task.id)
@@ -204,7 +204,7 @@ async def test_kill_task(async_session):
 
 @pytest.mark.asyncio
 async def test_purge_completed(async_session):
-    task = await create_task_async(async_session, task_type="scan", payload={})
+    task = await create_task_async(async_session, task_type="scan", kwargs={})
     await async_session.commit()
 
     row = await async_session.get(TaskEntryModel, task.id)

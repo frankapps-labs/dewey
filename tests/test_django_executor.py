@@ -33,18 +33,18 @@ class TestCreateTask:
         task = create_task(task_type="order.confirmed")
         assert task.task_type == "order.confirmed"
         assert task.status == TaskStatus.PENDING
-        assert task.payload == {}
+        assert task.kwargs == {}
         assert task.max_attempts == 5
         assert task.attempts == 0
 
     def test_creates_with_payload(self):
         task = create_task(
             task_type="order.confirmed",
-            payload={"order_id": 42},
+            kwargs={"order_id": 42},
             queue="high",
             priority=10,
         )
-        assert task.payload == {"order_id": 42}
+        assert task.kwargs == {"order_id": 42}
         assert task.queue == "high"
         assert task.priority == 10
 
@@ -72,8 +72,8 @@ class TestCreateTask:
 @pytest.mark.django_db(transaction=True)
 class TestProcessTask:
     def test_successful_processing(self):
-        task = create_task(task_type="test.task", payload={"x": 1})
-        result = process_task(task.id, handler=lambda t, p: None)
+        task = create_task(task_type="test.task", kwargs={"x": 1})
+        result = process_task(task.id, handler=lambda **kw: None)
         assert result is True
 
         from dewey.django.models import TaskEntry
@@ -86,7 +86,7 @@ class TestProcessTask:
     def test_failed_processing(self):
         task = create_task(task_type="test.task", max_attempts=5)
 
-        def bad_handler(t, p):
+        def bad_handler(**kwargs):
             raise ValueError("boom")
 
         result = process_task(task.id, handler=bad_handler)
@@ -103,7 +103,7 @@ class TestProcessTask:
         task = create_task(task_type="test.task", max_attempts=5)
         failure_time = None
 
-        def bad_handler(t, p):
+        def bad_handler(**kwargs):
             nonlocal failure_time
             time.sleep(0.01)
             failure_time = timezone.now()
@@ -122,7 +122,7 @@ class TestProcessTask:
 
         result = process_task(
             task.id,
-            handler=lambda t, p: (_ for _ in ()).throw(ValueError("fail")),
+            handler=lambda **kw: (_ for _ in ()).throw(ValueError("fail")),
         )
         assert result is False
 
@@ -133,13 +133,13 @@ class TestProcessTask:
 
     def test_skip_already_completed(self):
         task = create_task(task_type="test.task")
-        process_task(task.id, handler=lambda t, p: None)
+        process_task(task.id, handler=lambda **kw: None)
         # Process again — should skip
-        result = process_task(task.id, handler=lambda t, p: None)
+        result = process_task(task.id, handler=lambda **kw: None)
         assert result is False
 
     def test_skip_nonexistent_task(self):
-        result = process_task("nonexistent-id", handler=lambda t, p: None)
+        result = process_task("nonexistent-id", handler=lambda **kw: None)
         assert result is False
 
     def test_skip_task_not_ready(self):
@@ -147,7 +147,7 @@ class TestProcessTask:
         future = timezone.now() + timedelta(hours=1)
         task = create_task(task_type="test.task", scheduled_for=future)
 
-        result = process_task(task.id, handler=lambda t, p: None)
+        result = process_task(task.id, handler=lambda **kw: None)
         assert result is False
 
         from dewey.django.models import TaskEntry
@@ -167,7 +167,7 @@ class TestProcessTask:
         handler_started = threading.Event()
         handler_continue = threading.Event()
 
-        def slow_handler(task_type, payload):
+        def slow_handler(**kwargs):
             handler_started.set()
             handler_continue.wait(timeout=10)
 
@@ -203,7 +203,7 @@ class TestProcessTask:
         handler_started = threading.Event()
         handler_continue = threading.Event()
 
-        def slow_handler(task_type, payload):
+        def slow_handler(**kwargs):
             handler_started.set()
             handler_continue.wait(timeout=10)
 
@@ -236,7 +236,7 @@ class TestProcessTask:
         handler_started = threading.Event()
         handler_continue = threading.Event()
 
-        def slow_handler(task_type, payload):
+        def slow_handler(**kwargs):
             handler_started.set()
             handler_continue.wait(timeout=10)
 
@@ -270,7 +270,7 @@ class TestProcessTask:
         # Manually set to FAILED (simulating a previous failed attempt)
         TaskEntryModel.objects.filter(id=task.id).update(status=TaskStatus.FAILED.value)
 
-        result = process_task(task.id, handler=lambda t, p: None)
+        result = process_task(task.id, handler=lambda **kw: None)
         assert result is False
 
         updated = TaskEntryModel.objects.get(id=task.id)
@@ -287,7 +287,7 @@ class TestProcessTask:
         handler_started = threading.Event()
         handler_continue = threading.Event()
 
-        def slow_failing_handler(task_type, payload):
+        def slow_failing_handler(**kwargs):
             handler_started.set()
             handler_continue.wait(timeout=10)
             raise ValueError("boom")
@@ -321,7 +321,7 @@ class TestProcessTask:
         handler_started = threading.Event()
         handler_continue = threading.Event()
 
-        def slow_failing_handler(task_type, payload):
+        def slow_failing_handler(**kwargs):
             handler_started.set()
             handler_continue.wait(timeout=10)
             raise ValueError("boom")
