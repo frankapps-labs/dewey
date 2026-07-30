@@ -181,8 +181,11 @@ class SQLAlchemyDispatchBackend:
         fail with "connection already closed".
         """
         fairy = self.engine.raw_connection()
+        raw = fairy.driver_connection
+        # Read the driver connection *before* detaching: detach() clears the fairy's
+        # reference, and returning None would silently disable LISTEN.
         fairy.detach()
-        return fairy.driver_connection
+        return raw
 
 
 def _sleep(timeout: float) -> bool:

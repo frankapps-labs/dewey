@@ -430,3 +430,34 @@ class TestConcurrentDispatchers:
 
         statuses = set(session.execute(select(TaskEntryModel.status)).scalars().all())
         assert statuses == {TaskStatus.DISPATCHING.value}
+
+
+class TestWakeUp:
+    def test_the_backend_really_gets_a_listener(self, backend):
+        """Guards against silently regressing to poll-only wake-ups."""
+        backend.wait_for_work(0.01)
+        assert backend._listener.supported is True, (
+            "LISTEN did not start; the dispatcher would fall back to polling"
+        )
+
+    def test_a_committed_task_wakes_a_waiting_dispatcher(self, backend, engine):
+        """The wake-up path, measured: a notification must beat the poll interval."""
+        import threading
+
+        from sqlalchemy.orm import Session
+
+        backend.wait_for_work(0.01)  # open the listen connection first
+
+        def produce() -> None:
+            with Session(engine) as producer_session:
+                create_task(producer_session, task_type="t")
+                producer_session.commit()
+
+        timer = threading.Timer(0.1, produce)
+        timer.start()
+        try:
+            assert backend.wait_for_work(10.0) is True
+        finally:
+            timer.cancel()
+
+        assert len(backend.claim(10)) == 1

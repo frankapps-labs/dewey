@@ -1,4 +1,4 @@
-.PHONY: help install test test-cov lint typecheck format format-check clean build publish-test publish release ci setup
+.PHONY: help install test test-cov test-integration lint typecheck format format-check up down wheel-smoke clean build publish-test publish release ci setup
 
 PACKAGE := src/dewey
 
@@ -8,6 +8,10 @@ help:
 	@echo "Setup:"
 	@echo "  make install       Install with dev dependencies (uv sync)"
 	@echo ""
+	@echo "Infrastructure (Postgres + Redis for the test suite):"
+	@echo "  make up            Start containers and wait until healthy"
+	@echo "  make down          Stop containers and drop their volumes"
+	@echo ""
 	@echo "Development:"
 	@echo "  make test          Run tests"
 	@echo "  make test-cov      Run tests with coverage report"
@@ -15,6 +19,8 @@ help:
 	@echo "  make typecheck     Run basedpyright type checks"
 	@echo "  make format        Format code with ruff"
 	@echo "  make format-check  Check formatting without writing"
+	@echo "  make test-integration  Run the suite against the compose containers"
+	@echo "  make wheel-smoke   Build a wheel and exercise it in a clean venv"
 	@echo ""
 	@echo "Building & Publishing:"
 	@echo "  make clean         Remove build artifacts"
@@ -26,8 +32,31 @@ help:
 install:
 	uv sync --all-extras
 
+# Compose ports are offset so they cannot collide with a local Postgres/Redis.
+COMPOSE_DB := postgresql://postgres:postgres@localhost:55440/dewey_test
+COMPOSE_DB_ASYNC := postgresql+asyncpg://postgres:postgres@localhost:55440/dewey_test
+COMPOSE_REDIS := redis://localhost:56390/0
+
+up:
+	docker compose up -d --wait
+
+down:
+	docker compose down -v
+
 test:
 	uv run pytest
+
+test-integration: up
+	DEWEY_TEST_DATABASE_URL=$(COMPOSE_DB) \
+	DEWEY_TEST_DATABASE_URL_ASYNC=$(COMPOSE_DB_ASYNC) \
+	DEWEY_TEST_REDIS_URL=$(COMPOSE_REDIS) \
+	PGHOST=localhost PGPORT=55440 \
+	uv run pytest
+
+wheel-smoke: build
+	DEWEY_TEST_DATABASE_URL=$(COMPOSE_DB) \
+	DEWEY_TEST_REDIS_URL=$(COMPOSE_REDIS) \
+	./scripts/wheel_smoke.sh
 
 test-cov:
 	uv run pytest --cov=dewey --cov-report=term-missing --cov-report=html
