@@ -256,17 +256,24 @@ An async handler needs an async worker: register a `process_fn` that drives
 `process_task_async` on your loop. Async handlers are awaited by `process_task_async`,
 not by the sync `process_task`.
 
-The dispatcher itself is synchronous. Run it in its own process (the usual choice), or
-in a thread beside your event loop:
+The dispatcher has an async twin, so an asyncpg-only deployment never needs a
+synchronous driver:
 
 ```python
-import threading
+from dewey.dispatcher import AsyncDispatcher
+from dewey.sqlalchemy.dispatch import AsyncSQLAlchemyDispatchBackend
 
-threading.Thread(target=dispatcher.run, daemon=True).start()
+dispatcher = AsyncDispatcher(
+    AsyncSQLAlchemyDispatchBackend(async_engine),
+    adapter.dispatch,          # sync or async callable, both work
+)
+await dispatcher.run()         # or asyncio.create_task(dispatcher.run())
 ```
 
-For low-latency async setups, `dewey.sqlalchemy.listen.AsyncPostgresWorkListener`
-(asyncpg) provides LISTEN inside an existing event loop.
+It behaves identically to the sync dispatcher — same claim-commit-dispatch order, same
+immediate release and backoff on transport failure, same sweep tick — and it wakes on
+LISTEN through the asyncpg listener rather than a blocking thread. Cancelling the task
+shuts it down cleanly; `stop()` lets it finish the current pass first.
 
 ---
 

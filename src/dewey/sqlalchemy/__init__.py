@@ -42,6 +42,10 @@ from dewey.sqlalchemy.async_sweep import (
     sweep_failed_async,
     sweep_stuck_async,
 )
+from dewey.sqlalchemy.dispatch import (
+    AsyncSQLAlchemyDispatchBackend,
+    SQLAlchemyDispatchBackend,
+)
 from dewey.sqlalchemy.executor import create_task, process_task
 from dewey.sqlalchemy.listen import (
     DEFAULT_WORK_CHANNEL,
@@ -92,6 +96,9 @@ from dewey.sqlalchemy.queries import (
 from dewey.sqlalchemy.sweep import sweep, sweep_dispatching, sweep_failed, sweep_stuck
 
 __all__ = [
+    # Dispatch
+    "SQLAlchemyDispatchBackend",
+    "AsyncSQLAlchemyDispatchBackend",
     # Models
     "Base",
     "TaskEntryModel",

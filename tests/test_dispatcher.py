@@ -217,13 +217,13 @@ class TestDispatchBatch:
         dispatcher = Dispatcher(backend, flaky, sweep_interval_seconds=None)
 
         dispatcher.dispatch_batch()
-        assert dispatcher._retry_delay == pytest.approx(1.0)
+        assert dispatcher._health.retry_delay == pytest.approx(1.0)
         dispatcher.dispatch_batch()
-        assert dispatcher._retry_delay == pytest.approx(2.0)  # doubles, does not spin
+        assert dispatcher._health.retry_delay == pytest.approx(2.0)  # doubles, does not spin
 
         failing = False
         dispatcher.dispatch_batch()
-        assert dispatcher._retry_delay == 0.0  # reset once the broker answers
+        assert dispatcher._health.retry_delay == 0.0  # reset once the broker answers
 
     def test_backoff_is_capped(self, backend):
         dispatcher = Dispatcher(
@@ -233,8 +233,8 @@ class TestDispatchBatch:
             dispatch_retry_cap_seconds=4.0,
         )
         for _ in range(10):
-            dispatcher._note_dispatch_failure()
-        assert dispatcher._retry_delay == 4.0
+            dispatcher._health.note_failure()
+        assert dispatcher._health.retry_delay == 4.0
 
 
 class TestSweepTick:

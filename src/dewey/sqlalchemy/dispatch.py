@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 
 from sqlalchemy import Engine, or_, select, update
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session, sessionmaker
 
 from dewey.core.states import TaskStatus
 from dewey.listen_sync import DEFAULT_WORK_CHANNEL, SyncWorkListener
+from dewey.sqlalchemy.async_sweep import sweep_async
+from dewey.sqlalchemy.listen import AsyncPostgresWorkListener
 from dewey.sqlalchemy.models import TaskEntryModel
 from dewey.sqlalchemy.sweep import (
     DEFAULT_DISPATCH_TIMEOUT_SECONDS,
@@ -195,4 +199,149 @@ def _sleep(timeout: float) -> bool:
     return False
 
 
-__all__ = ["SQLAlchemyDispatchBackend"]
+class AsyncSQLAlchemyDispatchBackend:
+    """Claim, release and sweep against an async SQLAlchemy engine.
+
+    The async twin of :class:`SQLAlchemyDispatchBackend`, for asyncpg deployments that
+    should not have to add a synchronous driver and a second engine just to run a
+    dispatcher.
+
+    Wake-up uses Dewey's asyncpg listener, which lives on the event loop rather than
+    owning a blocking thread. As always, polling is the correctness path.
+
+    Args:
+        engine: An ``AsyncEngine``. On PostgreSQL the claim uses
+            ``FOR UPDATE SKIP LOCKED``, so any number of dispatchers cooperate.
+        queues: Restrict this dispatcher to these queues. ``None`` means all of them.
+    """
+
+    def __init__(
+        self,
+        engine: AsyncEngine,
+        *,
+        queues: Sequence[str] | None = None,
+        stuck_threshold_minutes: int = DEFAULT_STUCK_THRESHOLD_MINUTES,
+        dispatch_timeout_seconds: int = DEFAULT_DISPATCH_TIMEOUT_SECONDS,
+        sweep_limit: int = 100,
+        channel: str = DEFAULT_WORK_CHANNEL,
+        session_factory: Callable[[], AsyncSession] | None = None,
+    ) -> None:
+        self.engine = engine
+        self.queues = list(queues) if queues else None
+        self.stuck_threshold_minutes = stuck_threshold_minutes
+        self.dispatch_timeout_seconds = dispatch_timeout_seconds
+        self.sweep_limit = sweep_limit
+        self.channel = channel
+        self._session_factory = session_factory or async_sessionmaker(
+            bind=engine, expire_on_commit=False
+        )
+        self._supports_skip_locked = engine.dialect.name == "postgresql"
+        if not self._supports_skip_locked:
+            logger.warning(
+                "Dewey dispatcher: %s does not support SELECT ... FOR UPDATE SKIP "
+                "LOCKED. Run a single dispatcher against this database.",
+                engine.dialect.name,
+            )
+        self._listener: AsyncPostgresWorkListener | None = None
+        self._listener_started = False
+
+    # --- claim / release ---
+
+    async def claim(self, limit: int) -> list[str]:
+        """Move up to ``limit`` ready rows to DISPATCHING, committed before return."""
+        now = datetime.now(UTC)
+        candidates = (
+            select(TaskEntryModel.id)
+            .where(
+                TaskEntryModel.status == TaskStatus.PENDING.value,
+                or_(
+                    TaskEntryModel.scheduled_for.is_(None),
+                    TaskEntryModel.scheduled_for <= now,
+                ),
+            )
+            .order_by(
+                TaskEntryModel.priority.desc(),
+                TaskEntryModel.scheduled_for.asc().nulls_first(),
+                TaskEntryModel.created_at.asc(),
+            )
+            .limit(limit)
+        )
+        if self.queues is not None:
+            candidates = candidates.where(TaskEntryModel.queue.in_(self.queues))
+        if self._supports_skip_locked:
+            candidates = candidates.with_for_update(skip_locked=True)
+
+        # Lock first, then update the locked IDs — see the sync backend for why the
+        # single-statement version silently claims the whole table.
+        async with self._session_factory() as session:
+            result = await session.execute(candidates)
+            task_ids = list(result.scalars().all())
+            if not task_ids:
+                await session.rollback()
+                return []
+            claimed_result = await session.execute(
+                update(TaskEntryModel)
+                .where(
+                    TaskEntryModel.id.in_(task_ids),
+                    TaskEntryModel.status == TaskStatus.PENDING.value,
+                )
+                .values(status=TaskStatus.DISPATCHING.value, dispatching_at=now)
+                .returning(TaskEntryModel.id)
+            )
+            claimed = set(claimed_result.scalars())
+            await session.commit()
+        return [task_id for task_id in task_ids if task_id in claimed]
+
+    async def release(self, task_ids: Sequence[str]) -> None:
+        """Return claimed rows to PENDING, leaving the attempt count untouched."""
+        if not task_ids:
+            return
+        async with self._session_factory() as session:
+            await session.execute(
+                update(TaskEntryModel)
+                .where(
+                    TaskEntryModel.id.in_(list(task_ids)),
+                    TaskEntryModel.status == TaskStatus.DISPATCHING.value,
+                )
+                .values(status=TaskStatus.PENDING.value, dispatching_at=None)
+            )
+            await session.commit()
+
+    # --- recovery ---
+
+    async def run_sweep(self) -> dict[str, list[str]]:
+        async with self._session_factory() as session:
+            result = await sweep_async(
+                session,
+                stuck_threshold_minutes=self.stuck_threshold_minutes,
+                dispatch_timeout_seconds=self.dispatch_timeout_seconds,
+                limit=self.sweep_limit,
+            )
+            await session.commit()
+        return result
+
+    # --- wake-up ---
+
+    async def wait_for_work(self, timeout: float) -> bool:
+        if not self._listener_started:
+            self._listener_started = True
+            listener = AsyncPostgresWorkListener(self.engine, channel=self.channel)
+            try:
+                await listener.__aenter__()
+                self._listener = listener
+            except Exception:
+                logger.warning(
+                    "Dewey dispatcher: could not start LISTEN; polling only", exc_info=True
+                )
+        if self._listener is not None:
+            return bool(await self._listener.wait(timeout=timeout))
+        await asyncio.sleep(max(0.0, timeout))
+        return False
+
+    async def close(self) -> None:
+        if self._listener is not None:
+            await self._listener.__aexit__(None, None, None)
+            self._listener = None
+
+
+__all__ = ["AsyncSQLAlchemyDispatchBackend", "SQLAlchemyDispatchBackend"]

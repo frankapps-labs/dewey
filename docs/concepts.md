@@ -6,7 +6,8 @@ The usual arrangement has your application enqueue to a broker, and a ledger —
 is one — record what happened afterwards. Dewey reverses the direction of authority:
 
 - A task exists when its **row** exists. Nothing is enqueued anywhere first.
-- A **dispatcher** decides what is ready and hands task IDs to a transport.
+- A **dispatcher** decides what is ready and hands task IDs to a transport. Sync and
+  async implementations exist and behave identically.
 - The **transport** carries an ID to a worker. That is its entire job.
 - A **worker** loads the row, runs the registered handler, and records the outcome.
 

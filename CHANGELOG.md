@@ -70,6 +70,12 @@ string to be reused.
   transport. Any number of dispatchers cooperate without a leader election.
   Backends: `dewey.sqlalchemy.dispatch.SQLAlchemyDispatchBackend` and
   `dewey.django.dispatch.DjangoDispatchBackend`.
+- `dewey.dispatcher.AsyncDispatcher` and
+  `dewey.sqlalchemy.dispatch.AsyncSQLAlchemyDispatchBackend`, so an asyncpg-only
+  deployment does not have to add a synchronous driver and a second engine to run a
+  dispatcher. Pacing decisions (transport backoff, sweep interval) are shared code with
+  the sync loop so the two cannot drift; `dispatch_fn` may be sync or a coroutine
+  function; wake-up uses the asyncpg listener rather than a blocking thread.
 - `DISPATCHING` state and `dispatching_at`, with a partial index. Makes the window
   between "handed to the broker" and "a worker started it" visible, so a dispatcher
   that dies mid-dispatch leaves a recoverable row rather than lost work.
