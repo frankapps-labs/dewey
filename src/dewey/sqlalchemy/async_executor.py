@@ -10,13 +10,15 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dewey.core.backoff import BackoffFn, default_task_backoff
+from dewey.core.backoff import BackoffFn
+from dewey.core.execution import classify_failure, resolve_handler
 from dewey.core.logging import (
     extract_trace_context,
     reset_trace_context,
     set_trace_context,
 )
-from dewey.core.states import TaskStatus, should_die
+from dewey.core.states import TaskStatus
+from dewey.policy import resolve_policy
 from dewey.sqlalchemy.listen import notify_work_available_async
 from dewey.sqlalchemy.models import TaskEntryModel
 
@@ -32,9 +34,9 @@ async def create_task_async(
     task_type: str,
     args: Sequence[Any] | None = None,
     kwargs: dict[str, Any] | None = None,
-    queue: str = "default",
-    priority: int = 0,
-    max_attempts: int = 5,
+    queue: str | None = None,
+    priority: int | None = None,
+    max_attempts: int | None = None,
     scheduled_for: datetime | None = None,
     idempotency_key: str | None = None,
     metadata: dict[str, Any] | None = None,
@@ -47,13 +49,15 @@ async def create_task_async(
 
     Returns the created TaskEntryModel (with .id).
     """
+    policy = resolve_policy(task_type)
+    queue = policy.queue if queue is None else queue
     task = TaskEntryModel(
         task_type=task_type,
         args=list(args or []),
         kwargs=dict(kwargs or {}),
         queue=queue,
-        priority=priority,
-        max_attempts=max_attempts,
+        priority=policy.priority if priority is None else priority,
+        max_attempts=policy.max_attempts if max_attempts is None else max_attempts,
         scheduled_for=scheduled_for,
         idempotency_key=idempotency_key,
         task_metadata=metadata or {},
@@ -70,7 +74,7 @@ async def create_task_async(
 async def process_task_async(
     session: AsyncSession,
     task_id: str,
-    handler: AsyncTaskHandler,
+    handler: AsyncTaskHandler | None = None,
     *,
     backoff: BackoffFn | None = None,
 ) -> bool:
@@ -134,6 +138,7 @@ async def process_task_async(
     attempts = task.attempts
     max_attempts = task.max_attempts
     task_metadata = dict(task.task_metadata or {})
+    policy = resolve_policy(task_type)
 
     await session.commit()  # PROCESSING is now visible — sweep can find stuck tasks
 
@@ -144,7 +149,7 @@ async def process_task_async(
     try:
         # Phase 2: Execute async handler
         try:
-            await handler(*task_args, **task_kwargs)
+            await resolve_handler(task_type, handler, policy=policy)(*task_args, **task_kwargs)
         except Exception as exc:
             # Phase 3a: Mark failed or dead-lettered
             error_msg = str(exc)
@@ -168,26 +173,34 @@ async def process_task_async(
                 return False
 
             task.error = error_msg
-            failure_now = datetime.now(UTC)
+            outcome = classify_failure(
+                exc,
+                policy=policy,
+                attempts=attempts,
+                max_attempts=max_attempts,
+                now=datetime.now(UTC),
+                backoff=backoff,
+            )
+            task.status = outcome.status.value
 
-            if should_die(attempts, max_attempts):
-                task.status = TaskStatus.DEAD.value
+            if outcome.is_dead:
                 logger.error(
-                    "Task dead-lettered id=%s type=%s attempts=%d error=%s",
+                    "Task dead-lettered id=%s type=%s attempts=%d reason=%s error=%s",
                     task_id,
                     task_type,
                     attempts,
+                    outcome.reason,
                     exc,
                 )
             else:
-                task.status = TaskStatus.FAILED.value
-                task.scheduled_for = failure_now + (backoff or default_task_backoff)(attempts)
+                task.scheduled_for = outcome.retry_at
                 logger.warning(
-                    "Task failed id=%s type=%s attempts=%d/%d error=%s",
+                    "Task failed id=%s type=%s attempts=%d/%d retry_at=%s error=%s",
                     task_id,
                     task_type,
                     attempts,
                     max_attempts,
+                    outcome.retry_at,
                     exc,
                 )
 
