@@ -99,6 +99,7 @@ Nothing published depends on these; the previous line was in-repo only.
 | PostgreSQL | 13+ | Suite against 16 (local and compose) |
 | Django | 4.2+ | 6.0.7 locally; CI pins 4.2 and 5.1 explicitly |
 | SQLAlchemy | 2.0+ | 2.0.49 locally, sync and async |
+| Web frameworks | not an integration axis | Dewey never imports a web layer. A FastAPI/Starlette/Litestar/Flask app is a SQLAlchemy consumer; there is deliberately no `fastapi` extra. The lab's async chaos coverage runs through a FastAPI + asyncpg testbed |
 | Huey | 2.5+ | 3.0.0 locally; 2.5.5 verified separately, CI lane pins 2.5 |
 | Drivers | psycopg2, psycopg3, asyncpg | psycopg2 + asyncpg exercised; psycopg3 path is code-only (see limitations) |
 | Celery | not supported | removed |

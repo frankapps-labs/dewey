@@ -23,6 +23,19 @@ pip install "dewey[huey]"                # Huey transport adapter
 
 Requires Python 3.11+ and PostgreSQL 13+.
 
+**Which extra do I need?** Dewey integrates at the database layer, not the web layer, so
+pick by ORM:
+
+| You use | Install | Why |
+|---|---|---|
+| Django | `dewey[django]` | Django models and migrations ship with it, plus a `dewey_dispatcher` management command |
+| FastAPI, Starlette, Litestar, Flask + SQLAlchemy | `dewey[sqlalchemy,async]` (or drop `async` for sync) | Dewey never touches your web framework — it only needs your ORM |
+| No web framework at all | `dewey[sqlalchemy]` | A script or worker fleet is a first-class consumer |
+
+There is no `fastapi` extra because there is nothing for it to install: an async FastAPI
+app is a SQLAlchemy async consumer, and that path has its own dispatcher
+(`AsyncDispatcher`) so an asyncpg deployment never needs a synchronous driver.
+
 ## Quickstart
 
 **1. Declare the task.** Handlers stay ordinary functions. Policy sits next to them, as
