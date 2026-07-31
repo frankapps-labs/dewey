@@ -212,7 +212,20 @@ def __getattr__(name: str) -> Any:
     module_path = _LAZY.get(name)
     if module_path is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    value = getattr(import_module(module_path), name)
+    try:
+        module = import_module(module_path)
+    except ModuleNotFoundError as exc:
+        # `import dewey.django` succeeds without Django, because this package imports
+        # nothing at module level. The failure therefore surfaces here, on first use,
+        # where a bare "No module named 'django'" would not say what to do about it.
+        if (exc.name or "").split(".")[0] == "django":
+            raise ModuleNotFoundError(
+                f"dewey.django needs Django, which is not installed. Install it with "
+                f"pip install 'dewey[django]'. (Reaching for {name!r}.)",
+                name=exc.name,
+            ) from exc
+        raise
+    value = getattr(module, name)
     globals()[name] = value
     return value
 

@@ -70,6 +70,10 @@ string to be reused.
   transport. Any number of dispatchers cooperate without a leader election.
   Backends: `dewey.sqlalchemy.dispatch.SQLAlchemyDispatchBackend` and
   `dewey.django.dispatch.DjangoDispatchBackend`.
+- Reaching for `dewey.django` without Django installed now says what to install rather
+  than raising a bare `No module named 'django'`. The package imports nothing at module
+  level (so Django's app registry is never touched too early), which means a missing
+  Django can only surface on first use.
 - Both dispatchers now survive a database outage. Previously an exception from
   `claim()` — the shape a Postgres blip takes — escaped the run loop and ended the
   dispatcher process, so claimed work waited for the dispatch timeout and nothing swept

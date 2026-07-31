@@ -240,3 +240,47 @@ class TestMigrationsShip:
         from django.core.management import call_command
 
         call_command("makemigrations", "dewey", check=True, dry_run=True, verbosity=0)
+
+
+class TestMissingDjangoGuidance:
+    """`import dewey.django` works without Django; using it must say what to install.
+
+    The package imports nothing at module level (so Django's app registry is never
+    touched too early), which means a missing Django only surfaces on first attribute
+    access — where a bare "No module named 'django'" is not actionable.
+    """
+
+    def test_the_error_names_the_extra_to_install(self, monkeypatch):
+        import dewey.django as dewey_django
+
+        def missing_django(path: str):
+            raise ModuleNotFoundError("No module named 'django'", name="django")
+
+        monkeypatch.setattr(dewey_django, "import_module", missing_django)
+        monkeypatch.delitem(dewey_django.__dict__, "get_stats", raising=False)
+
+        with pytest.raises(ModuleNotFoundError) as excinfo:
+            _ = dewey_django.get_stats  # the attribute access is what fails
+
+        message = str(excinfo.value)
+        assert "dewey[django]" in message
+        assert "get_stats" in message  # says which name was being reached for
+
+    def test_an_unrelated_import_error_is_not_disguised(self, monkeypatch):
+        """A broken dependency inside our own module must not be reported as Django."""
+        import dewey.django as dewey_django
+
+        def missing_other(path: str):
+            raise ModuleNotFoundError("No module named 'psycopg2'", name="psycopg2")
+
+        monkeypatch.setattr(dewey_django, "import_module", missing_other)
+        monkeypatch.delitem(dewey_django.__dict__, "get_stats", raising=False)
+
+        with pytest.raises(ModuleNotFoundError, match="psycopg2"):
+            _ = dewey_django.get_stats
+
+    def test_an_unknown_name_is_still_an_attribute_error(self):
+        import dewey.django as dewey_django
+
+        with pytest.raises(AttributeError, match="no attribute"):
+            _ = dewey_django.definitely_not_a_dewey_function

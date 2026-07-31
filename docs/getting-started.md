@@ -14,6 +14,11 @@ This guide sets that up for Django, SQLAlchemy sync, and SQLAlchemy async.
 - A broker only if you want one. Huey over Redis is the supported transport; for a
   single-process setup you can dispatch straight into an in-process function.
 
+Extras control *dependencies*, not which files ship: one wheel carries every module, so
+`dewey/django/` is on disk (76 KB) even in a SQLAlchemy-only install. Nothing imports it
+unless you ask for it — no import time, no memory, no Django dependency — and touching it
+without Django installed tells you to install `dewey[django]`.
+
 Pick a section by **ORM**, not by web framework. Dewey never imports or touches your web
 layer — a FastAPI, Starlette, Litestar or Flask app on async SQLAlchemy follows
 [SQLAlchemy (async)](#sqlalchemy-async) below, and one on sync SQLAlchemy follows
