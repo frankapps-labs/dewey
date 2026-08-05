@@ -238,17 +238,17 @@ recalibrating in the lab; it is not a release blocker.
 
 ## Before publishing
 
-1. **Confirm the repo lives at `frankapps-labs/dewey`.** Project metadata, the
-   CONTRIBUTING clone URL and the SECURITY advisory link now all point there, matching
-   the git remote. The four `[project.urls]` entries become the PyPI sidebar
-   permanently for 0.4.0, so a wrong org there is not fixable in-place.
-2. **Confirm PyPI ownership** of the `dewey` project in the web UI ("Your projects") —
-   the JSON API does not expose owners. The README credits the original owner for donating
-   the name, so this is a formality, but the first upload is a bad place to discover a
-   permissions problem.
-3. **Decide on the notification layer.** It ships experimental. If the intent is to fold
-   it into the task engine later, that is a deliberate breaking change to plan, not to
-   discover.
+1. ~~Confirm the repo lives at `frankapps-labs/dewey`.~~ **Done** — project metadata, the
+   CONTRIBUTING clone URL and the SECURITY advisory link all point there, matching the
+   git remote.
+2. ~~**Confirm PyPI ownership** of the `dewey` project.~~ **Confirmed by the maintainer.**
+3. ~~**Decide on the notification layer.**~~ **Decided:** experimental in 0.4.0, folded
+   into the task engine in 0.5 — notifications become task types with channel handlers,
+   and per-attempt history is promoted to the task ledger for *all* task types, since
+   "why did this retry six times?" is a question about every task. Reasoning and the
+   competitive landscape are recorded in the private
+   `docs/decisions/dewey/dewey-positioning-and-notifications.md`. The experimental marking
+   already in this release is what keeps that path open without a broken promise.
 4. Merge `release/0.4.0` → `main` (`make release` requires `main`).
 5. Tag `v0.4.0` and push; `.github/workflows/publish.yml` publishes on tag via trusted
    publishing.
@@ -257,7 +257,7 @@ recalibrating in the lab; it is not a release blocker.
 ## Publication checklist
 
 - [x] Resilience lab run green against this head (11/11 scenarios, verdict PASS)
-- [ ] PyPI project ownership confirmed
+- [x] PyPI project ownership confirmed (maintainer owns the `dewey` project)
 - [ ] `archive/celery-adapter-enqueue-era` pushed, so the changelog's reference to it is
       true for anyone reading it
 - [ ] `release/0.4.0` merged to `main`, CI green there

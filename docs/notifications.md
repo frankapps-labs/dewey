@@ -5,10 +5,11 @@
 > second ledger with its own state machine and its own sweep, and it predates the
 > dispatcher: notifications are **not** dispatcher-driven and have no `DISPATCHING` state.
 >
-> The open question is whether a notification should simply *be* a task — a task type
-> whose handler sends through a channel, using `TaskPolicy` for retries instead of a
-> parallel retry engine. Until that is settled, treat this as useful but unfrozen, and
-> build anything load-bearing on the task API.
+> The intended direction is now settled: a notification should simply *be* a task — a
+> task type whose handler sends through a channel, using `TaskPolicy` for retries instead
+> of a parallel retry engine — with per-attempt history promoted to the task ledger for
+> every task type rather than living only here. Expect this layer to be replaced along
+> those lines in a later release, so build anything load-bearing on the task API.
 
 Dewey includes a notification layer that tracks delivery of messages through channels (email, webhook, Slack, etc.) with per-attempt tracking, retry, and dead-lettering.
 

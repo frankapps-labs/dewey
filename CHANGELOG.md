@@ -16,9 +16,11 @@ string to be reused.
   `NotificationAttempt`, `Channel`, `ChannelRegistry`) is now documented as
   **experimental** and sits outside the stability expectations for the rest of the
   package. It is a second ledger with its own state machine and sweep, it predates the
-  dispatcher, and it is not dispatcher-driven. The open question for a later release is
-  whether a notification should simply be a task type with a channel handler, replacing
-  the parallel retry engine with `TaskPolicy`. Migrations still ship for its tables.
+  dispatcher, and it is not dispatcher-driven. The intended direction for a later release
+  is to replace it: a notification becomes a task type with a channel handler, and
+  per-attempt history moves to the task ledger for every task type instead of living only
+  in this layer. Build anything load-bearing on the task API. Migrations still ship for
+  its tables.
 
 ### Removed
 - Celery support: the `dewey.adapters.celery` module, the `[celery]` extra, and
