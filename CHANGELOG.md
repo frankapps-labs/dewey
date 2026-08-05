@@ -85,6 +85,16 @@ string to be reused.
   than raising a bare `No module named 'django'`. The package imports nothing at module
   level (so Django's app registry is never touched too early), which means a missing
   Django can only surface on first use.
+- A claim the dispatcher could not return to `PENDING` — because the database was the
+  thing that broke — is now remembered and retried on the next iteration instead of being
+  left to the dispatch-timeout sweep. Previously a four-second blip stranded work in
+  `DISPATCHING` for up to `dispatch_timeout_seconds` (300s by default), long after the
+  database had recovered. Found by the resilience lab, which showed rows sitting in
+  `DISPATCHING` for an entire run.
+- Database failures now back off on their own shorter curve (1s doubling to 5s) rather
+  than sharing the transport's 1s→30s. A remote broker deserves a long leash; the database
+  we are already connected to does not, and a 30s sleep after Postgres returns is wasted
+  recovery time.
 - Both dispatchers now survive a database outage. Previously an exception from
   `claim()` — the shape a Postgres blip takes — escaped the run loop and ended the
   dispatcher process, so claimed work waited for the dispatch timeout and nothing swept

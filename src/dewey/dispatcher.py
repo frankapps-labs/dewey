@@ -46,6 +46,10 @@ DEFAULT_SWEEP_INTERVAL_SECONDS = 60.0
 #: Transport failure backoff, so a dead broker is not hammered.
 DEFAULT_DISPATCH_RETRY_BASE_SECONDS = 1.0
 DEFAULT_DISPATCH_RETRY_CAP_SECONDS = 30.0
+#: Database failure backoff. Deliberately much shorter than the transport cap: the
+#: database is what we are already connected to, re-probing it costs one cheap query, and
+#: a long sleep here means work sits idle after Postgres has already come back.
+DEFAULT_DATABASE_RETRY_CAP_SECONDS = 5.0
 
 DispatchFn = Callable[[str], Any]
 
@@ -153,6 +157,7 @@ class Dispatcher:
         sweep_interval_seconds: float | None = DEFAULT_SWEEP_INTERVAL_SECONDS,
         dispatch_retry_base_seconds: float = DEFAULT_DISPATCH_RETRY_BASE_SECONDS,
         dispatch_retry_cap_seconds: float = DEFAULT_DISPATCH_RETRY_CAP_SECONDS,
+        database_retry_cap_seconds: float = DEFAULT_DATABASE_RETRY_CAP_SECONDS,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         if batch_size < 1:
@@ -163,8 +168,15 @@ class Dispatcher:
         self.idle_poll_seconds = idle_poll_seconds
         self.sweep_interval_seconds = sweep_interval_seconds
         self._health = _TransportHealth(dispatch_retry_base_seconds, dispatch_retry_cap_seconds)
+        # A failing claim or sweep is the database, not the transport. Recovering from it
+        # quickly matters more, so it gets its own shorter cap.
+        self._db_health = _TransportHealth(dispatch_retry_base_seconds, database_retry_cap_seconds)
         self._sweep_clock = _SweepClock(sweep_interval_seconds, monotonic)
         self._stop = threading.Event()
+        # Claims we could not return to PENDING because the database was unreachable.
+        # Retried every iteration: the dispatch-timeout sweep is the backstop for a
+        # dispatcher that dies, not the primary path for one that is still running.
+        self._pending_release: list[str] = []
 
     # --- one unit of work ---
 
@@ -237,6 +249,7 @@ class Dispatcher:
                 iterations += 1
 
                 try:
+                    self._retry_pending_release()
                     self.maybe_sweep()
                     dispatched = self.dispatch_batch()
                 except Exception:
@@ -248,13 +261,15 @@ class Dispatcher:
                         "Dispatcher iteration failed; backing off and retrying",
                         exc_info=True,
                     )
-                    self._health.note_failure()
+                    self._db_health.note_failure()
                     dispatched = 0
+                else:
+                    self._db_health.note_success()
 
-                if self._health.retry_delay:
-                    # The transport is unhealthy. Wait, rather than spinning on a
-                    # broker that is refusing connections.
-                    self._stop.wait(self._health.retry_delay)
+                delay = max(self._health.retry_delay, self._db_health.retry_delay)
+                if delay:
+                    # Something upstream is unhealthy. Wait rather than spinning on it.
+                    self._stop.wait(delay)
                     continue
                 if dispatched >= self.batch_size:
                     # A full batch usually means more is waiting; skip the wait.
@@ -267,19 +282,33 @@ class Dispatcher:
     def _release_quietly(self, task_ids: Sequence[str]) -> None:
         """Release claims, tolerating a database that is itself unavailable.
 
-        If the release cannot be written, the rows stay in DISPATCHING and the
-        dispatch-timeout sweep reclaims them. That backstop exists precisely so this
-        path never has to be fatal.
+        A release that cannot be written is remembered and retried on the next
+        iteration. Leaving it to the dispatch-timeout sweep instead would strand the
+        work for ``dispatch_timeout_seconds`` — minutes, by default — after a blip the
+        database had already recovered from.
         """
         try:
             self.backend.release(task_ids)
         except Exception:
+            self._pending_release.extend(task_ids)
             logger.warning(
-                "Could not return %d claimed task(s) to pending; the dispatch-timeout "
-                "sweep will reclaim them",
+                "Could not return %d claimed task(s) to pending; will retry",
                 len(task_ids),
                 exc_info=True,
             )
+
+    def _retry_pending_release(self) -> None:
+        """Re-attempt releases that failed while the database was unreachable."""
+        if not self._pending_release:
+            return
+        task_ids, self._pending_release = self._pending_release, []
+        try:
+            self.backend.release(task_ids)
+        except Exception:
+            self._pending_release = task_ids
+            logger.warning("Still cannot return %d claimed task(s) to pending", len(task_ids))
+        else:
+            logger.info("Returned %d previously stranded task(s) to pending", len(task_ids))
 
     def stop(self) -> None:
         """Ask the loop to finish. Safe to call from a signal handler."""
@@ -292,6 +321,7 @@ class Dispatcher:
 
 __all__ = [
     "DEFAULT_BATCH_SIZE",
+    "DEFAULT_DATABASE_RETRY_CAP_SECONDS",
     "AsyncDispatchBackend",
     "AsyncDispatcher",
     "DEFAULT_DISPATCH_RETRY_CAP_SECONDS",
@@ -359,6 +389,7 @@ class AsyncDispatcher:
         sweep_interval_seconds: float | None = DEFAULT_SWEEP_INTERVAL_SECONDS,
         dispatch_retry_base_seconds: float = DEFAULT_DISPATCH_RETRY_BASE_SECONDS,
         dispatch_retry_cap_seconds: float = DEFAULT_DISPATCH_RETRY_CAP_SECONDS,
+        database_retry_cap_seconds: float = DEFAULT_DATABASE_RETRY_CAP_SECONDS,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         if batch_size < 1:
@@ -369,8 +400,12 @@ class AsyncDispatcher:
         self.idle_poll_seconds = idle_poll_seconds
         self.sweep_interval_seconds = sweep_interval_seconds
         self._health = _TransportHealth(dispatch_retry_base_seconds, dispatch_retry_cap_seconds)
+        # See the sync dispatcher: database failures recover on a shorter leash.
+        self._db_health = _TransportHealth(dispatch_retry_base_seconds, database_retry_cap_seconds)
         self._sweep_clock = _SweepClock(sweep_interval_seconds, monotonic)
         self._stop = asyncio.Event()
+        # See the sync dispatcher: stranded claims are retried, not left to the sweep.
+        self._pending_release: list[str] = []
 
     # --- one unit of work ---
 
@@ -434,6 +469,7 @@ class AsyncDispatcher:
                 iterations += 1
 
                 try:
+                    await self._retry_pending_release()
                     await self.maybe_sweep()
                     dispatched = await self.dispatch_batch()
                 except asyncio.CancelledError:
@@ -445,11 +481,14 @@ class AsyncDispatcher:
                         "Dispatcher iteration failed; backing off and retrying",
                         exc_info=True,
                     )
-                    self._health.note_failure()
+                    self._db_health.note_failure()
                     dispatched = 0
+                else:
+                    self._db_health.note_success()
 
-                if self._health.retry_delay:
-                    await self._sleep(self._health.retry_delay)
+                delay = max(self._health.retry_delay, self._db_health.retry_delay)
+                if delay:
+                    await self._sleep(delay)
                     continue
                 if dispatched >= self.batch_size:
                     continue
@@ -464,18 +503,31 @@ class AsyncDispatcher:
     async def _release_quietly(self, task_ids: Sequence[str]) -> None:
         """Release claims, tolerating a database that is itself unavailable.
 
-        The rows stay in DISPATCHING if this cannot be written, and the
-        dispatch-timeout sweep reclaims them.
+        Remembered and retried next iteration rather than left to the dispatch-timeout
+        sweep, which would strand the work for minutes after a recovered blip.
         """
         try:
             await self.backend.release(task_ids)
         except Exception:
+            self._pending_release.extend(task_ids)
             logger.warning(
-                "Could not return %d claimed task(s) to pending; the dispatch-timeout "
-                "sweep will reclaim them",
+                "Could not return %d claimed task(s) to pending; will retry",
                 len(task_ids),
                 exc_info=True,
             )
+
+    async def _retry_pending_release(self) -> None:
+        """Re-attempt releases that failed while the database was unreachable."""
+        if not self._pending_release:
+            return
+        task_ids, self._pending_release = self._pending_release, []
+        try:
+            await self.backend.release(task_ids)
+        except Exception:
+            self._pending_release = task_ids
+            logger.warning("Still cannot return %d claimed task(s) to pending", len(task_ids))
+        else:
+            logger.info("Returned %d previously stranded task(s) to pending", len(task_ids))
 
     async def _sleep(self, seconds: float) -> None:
         """Sleep, but wake immediately if asked to stop."""

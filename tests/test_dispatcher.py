@@ -491,7 +491,7 @@ class TestSurvivesDatabaseOutage:
         dispatcher.run(max_iterations=3)
 
         assert len(calls) == 3  # kept trying instead of exiting
-        assert dispatcher._health.retry_delay > 0  # and backed off while broken
+        assert dispatcher._db_health.retry_delay > 0  # and backed off while broken
 
     def test_the_loop_recovers_when_the_database_comes_back(self, backend, session, collected):
         task = create_task(session, task_type="t")
@@ -518,17 +518,28 @@ class TestSurvivesDatabaseOutage:
         dispatcher.run(max_iterations=2)
 
         assert collected == [task.id]
-        assert dispatcher._health.retry_delay == 0.0
+        assert dispatcher._db_health.retry_delay == 0.0  # cleared once the database answered
 
-    def test_a_failing_release_leaves_the_row_for_the_sweep(self, backend, session, caplog):
-        """If the database is what broke, the release cannot be written either."""
+    def test_a_failing_release_is_retried_not_abandoned(self, backend, session, caplog):
+        """A stranded claim must not wait out the dispatch timeout.
+
+        Found by the resilience lab: when the database died mid-dispatch the release
+        could not be written, rows sat in DISPATCHING, and only the timeout sweep
+        (300s by default) recovered them — so a 4-second blip stranded work for
+        minutes. The dispatcher knows which IDs it holds, so it retries them.
+        """
         task = create_task(session, task_type="t")
         session.commit()
 
-        def broken_release(task_ids) -> None:
-            raise ConnectionError("connection is closed")
+        real_release = backend.release
+        release_broken = [True]
 
-        backend.release = broken_release  # type: ignore[method-assign]
+        def flaky_release(task_ids) -> None:
+            if release_broken[0]:
+                raise ConnectionError("connection is closed")
+            real_release(task_ids)
+
+        backend.release = flaky_release  # type: ignore[method-assign]
 
         def broken_transport(task_id: str) -> None:
             raise ConnectionError("redis is down")
@@ -538,8 +549,36 @@ class TestSurvivesDatabaseOutage:
         with caplog.at_level(logging.WARNING):
             assert dispatcher.dispatch_batch() == 0  # did not raise
 
-        assert "dispatch-timeout sweep will reclaim them" in caplog.text
+        assert dispatcher._pending_release == [task.id]  # remembered
         assert _status(session, task.id) == TaskStatus.DISPATCHING.value
+
+        # Database recovers; the next iteration returns the row without any sweep.
+        release_broken[0] = False
+        dispatcher._retry_pending_release()
+
+        assert dispatcher._pending_release == []
+        assert _status(session, task.id) == TaskStatus.PENDING.value
+
+    def test_a_still_broken_release_stays_queued_for_the_next_pass(self, backend, session):
+        create_task(session, task_type="t")
+        session.commit()
+
+        def broken_release(task_ids) -> None:
+            raise ConnectionError("connection is closed")
+
+        backend.release = broken_release  # type: ignore[method-assign]
+        dispatcher = Dispatcher(
+            backend,
+            lambda task_id: (_ for _ in ()).throw(ConnectionError("redis is down")),
+            sweep_interval_seconds=None,
+        )
+
+        dispatcher.dispatch_batch()
+        held = list(dispatcher._pending_release)
+        assert held
+
+        dispatcher._retry_pending_release()
+        assert dispatcher._pending_release == held  # not dropped on the floor
 
     def test_a_failing_sweep_is_already_tolerated(self, backend, collected):
         def boom() -> dict[str, list[str]]:
@@ -551,3 +590,63 @@ class TestSurvivesDatabaseOutage:
         )
 
         dispatcher.run(max_iterations=2)  # must not raise
+
+
+class TestDatabaseBackoffIsShorterThanTransport:
+    """A database that comes back should be noticed quickly.
+
+    Found by the resilience lab: with one shared 1s->30s curve, the dispatcher could
+    still be asleep for 30s after Postgres had already recovered, which pushed the
+    db-outage scenario past its drain gate. The database is what we are already
+    connected to and re-probing costs one query, so it gets its own shorter cap.
+    """
+
+    def test_the_database_cap_is_lower_than_the_transport_cap(self, backend):
+        dispatcher = Dispatcher(backend, lambda task_id: None)
+        for _ in range(20):
+            dispatcher._health.note_failure()
+            dispatcher._db_health.note_failure()
+
+        assert dispatcher._db_health.retry_delay == 5.0
+        assert dispatcher._health.retry_delay == 30.0
+        assert dispatcher._db_health.retry_delay < dispatcher._health.retry_delay
+
+    def test_a_recovered_database_clears_its_backoff_on_the_next_pass(self, backend, collected):
+        failures = [3]
+
+        real_claim = backend.claim
+
+        def flaky_claim(limit: int) -> list[str]:
+            if failures[0] > 0:
+                failures[0] -= 1
+                raise ConnectionError("connection is closed")
+            return real_claim(limit)
+
+        backend.claim = flaky_claim  # type: ignore[method-assign]
+        dispatcher = Dispatcher(
+            backend,
+            collected.append,
+            idle_poll_seconds=0.01,
+            sweep_interval_seconds=None,
+            dispatch_retry_base_seconds=0.01,
+        )
+
+        dispatcher.run(max_iterations=3)
+        assert dispatcher._db_health.retry_delay > 0  # still failing
+
+        dispatcher.run(max_iterations=1)
+        assert dispatcher._db_health.retry_delay == 0.0  # recovered, no lingering sleep
+
+    def test_transport_and_database_backoff_are_tracked_separately(self, backend, session):
+        """A broker outage must not slow database recovery, or vice versa."""
+        create_task(session, task_type="t")
+        session.commit()
+
+        def broken_transport(task_id: str) -> None:
+            raise ConnectionError("redis is down")
+
+        dispatcher = Dispatcher(backend, broken_transport, sweep_interval_seconds=None)
+        dispatcher.dispatch_batch()
+
+        assert dispatcher._health.retry_delay > 0  # transport is unhealthy
+        assert dispatcher._db_health.retry_delay == 0.0  # the database is fine

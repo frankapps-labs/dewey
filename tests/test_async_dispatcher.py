@@ -364,7 +364,7 @@ class TestSurvivesDatabaseOutage:
         await dispatcher.run(max_iterations=3)
 
         assert len(calls) == 3
-        assert dispatcher._health.retry_delay > 0
+        assert dispatcher._db_health.retry_delay > 0
 
     async def test_the_loop_recovers_when_the_database_comes_back(self, backend, async_session):
         task = await create_task_async(async_session, task_type="t")
@@ -392,7 +392,7 @@ class TestSurvivesDatabaseOutage:
         await dispatcher.run(max_iterations=2)
 
         assert seen == [task.id]
-        assert dispatcher._health.retry_delay == 0.0
+        assert dispatcher._db_health.retry_delay == 0.0
 
     async def test_a_failing_release_leaves_the_row_for_the_sweep(self, backend, async_session):
         task = await create_task_async(async_session, task_type="t")

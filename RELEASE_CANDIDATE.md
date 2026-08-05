@@ -121,8 +121,8 @@ All at the head of this branch.
 | `make lint` | All checks passed |
 | `make format-check` | 82 files already formatted |
 | `make typecheck` (basedpyright) | 0 errors, 0 warnings, 0 notes |
-| `make test` (local Postgres 16) | **437 passed**, 93% coverage |
-| `make test-integration` (compose Postgres + Redis) | **437 passed** |
+| `make test` (local Postgres 16) | **441 passed**, 92% coverage |
+| `make test-integration` (compose Postgres + Redis) | **441 passed** |
 | Multi-dispatcher concurrency (4 threads, 60 tasks, real Postgres) | pass — every task claimed exactly once |
 | Resilience lab, ADR-003 suite (11 scenarios, chaos) | **verdict PASS** |
 | Huey 2.5.5 adapter suite | 17 passed |
@@ -162,7 +162,13 @@ Worth recording because each would have shipped silently:
    closed, breaking every later checkout.
 4. **`dewey.django.sweep` was ambiguous** — the function on first access, the submodule
    afterwards.
-5. **A database blip killed the dispatcher.** An exception from `claim()` escaped the run
+5. **A stranded claim waited out the dispatch timeout.** When the database died
+   mid-dispatch, the release could not be written, so rows sat in `DISPATCHING` until the
+   timeout sweep — 300s by default — recovered them. The lab showed 12 rows stuck for an
+   entire run. The dispatcher knows which IDs it holds, so it now retries the release each
+   iteration and the timeout sweep is only the crash backstop. Database failures also got
+   their own shorter backoff cap (5s vs the transport's 30s).
+6. **A database blip killed the dispatcher.** An exception from `claim()` escaped the run
    loop and ended the process, so claimed work then waited for the dispatch timeout and
    nothing swept at all. Found by the resilience lab's `db-outage` scenario, which failed
    on first run against 0.4 (nothing drained, rows stuck in `PROCESSING` for 74s) and
@@ -207,10 +213,10 @@ Worth recording because each would have shipped silently:
 
 ## Resilience lab
 
-> **Note:** this verdict predates the notification-layer removal. The lab's testbed and
-> tooling still reference that layer, so the lab cannot run against the current head until
-> a lab-side cleanup lands — recorded in the lab's own `reports/latest.md`. Reproducing the
-> verdict below means checking Dewey out at `archive/notification-ledger-0.4`.
+**Re-run 2026-08-05 against the de-notified head: PASS, 10/10 scenarios**, plus
+`worker-kill-check`. The suite found two further dispatcher defects on this pass — the
+stranded-claim timeout and the shared backoff curve — both fixed above. The
+`notification-pressure` scenario retires with the layer it exercised.
 
 The private lab's testbed was migrated to the 0.4 API (`@dewey.task` declarations,
 `kwargs=`, and `AsyncDispatcher` replacing its hand-rolled claim and sweep loops) and the
