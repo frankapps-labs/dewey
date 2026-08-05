@@ -164,7 +164,7 @@ def process_task(
 
     session.commit()  # PROCESSING is now visible — sweep can find stuck tasks
 
-    # Restore the trace context captured at task/notification creation
+    # Restore the trace context captured at task creation
     # time so every log line through Phase 2 and Phase 3 is correlated
     # with the originating request.
     _trace_token = set_trace_context(extract_trace_context(task_metadata))

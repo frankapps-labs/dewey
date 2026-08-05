@@ -84,28 +84,47 @@ class DispatchBackend(Protocol):
         ...
 
 
-class _TransportHealth:
-    """Backoff bookkeeping for a transport that is refusing work.
+class _BackoffState:
+    """Independent retry timing for one upstream dependency.
 
-    Shared by both dispatchers: a broker outage should look the same whichever loop
-    is driving.
+    ``retry_delay`` is the exponential step to use after the next failure;
+    ``remaining_delay`` is what the loop must still wait now. Keeping those separate
+    prevents an already-served 30-second broker delay from making a newly recovered
+    database sleep for another 30 seconds.
     """
 
-    def __init__(self, base_seconds: float, cap_seconds: float) -> None:
+    def __init__(
+        self,
+        label: str,
+        base_seconds: float,
+        cap_seconds: float,
+        monotonic: Callable[[], float],
+    ) -> None:
+        self.label = label
         self.base_seconds = base_seconds
         self.cap_seconds = cap_seconds
         self.retry_delay = 0.0
+        self._retry_at = 0.0
+        self._monotonic = monotonic
 
     def note_failure(self) -> None:
         if self.retry_delay:
             self.retry_delay = min(self.retry_delay * 2, self.cap_seconds)
         else:
             self.retry_delay = self.base_seconds
+        self._retry_at = self._monotonic() + self.retry_delay
 
     def note_success(self) -> None:
         if self.retry_delay:
-            logger.info("Transport recovered; resuming normal dispatch")
+            logger.info("%s recovered; resuming normal dispatch", self.label)
         self.retry_delay = 0.0
+        self._retry_at = 0.0
+
+    @property
+    def remaining_delay(self) -> float:
+        if not self.retry_delay:
+            return 0.0
+        return max(0.0, self._retry_at - self._monotonic())
 
 
 class _SweepClock:
@@ -167,10 +186,14 @@ class Dispatcher:
         self.batch_size = batch_size
         self.idle_poll_seconds = idle_poll_seconds
         self.sweep_interval_seconds = sweep_interval_seconds
-        self._health = _TransportHealth(dispatch_retry_base_seconds, dispatch_retry_cap_seconds)
+        self._health = _BackoffState(
+            "Transport", dispatch_retry_base_seconds, dispatch_retry_cap_seconds, monotonic
+        )
         # A failing claim or sweep is the database, not the transport. Recovering from it
         # quickly matters more, so it gets its own shorter cap.
-        self._db_health = _TransportHealth(dispatch_retry_base_seconds, database_retry_cap_seconds)
+        self._db_health = _BackoffState(
+            "Database", dispatch_retry_base_seconds, database_retry_cap_seconds, monotonic
+        )
         self._sweep_clock = _SweepClock(sweep_interval_seconds, monotonic)
         self._stop = threading.Event()
         # Claims we could not return to PENDING because the database was unreachable.
@@ -248,27 +271,38 @@ class Dispatcher:
                     break
                 iterations += 1
 
-                try:
-                    self._retry_pending_release()
-                    self.maybe_sweep()
-                    dispatched = self.dispatch_batch()
-                except Exception:
-                    # Almost always the database going away underneath us. A
-                    # dispatcher that exits here is worse than useless: claimed work
-                    # waits for the dispatch timeout and nothing sweeps at all, so a
-                    # blip becomes an outage. Back off and try again.
-                    logger.warning(
-                        "Dispatcher iteration failed; backing off and retrying",
-                        exc_info=True,
-                    )
-                    self._db_health.note_failure()
+                release_ready = self._retry_pending_release()
+                if not release_ready:
+                    # Do not claim more work while rows we already own remain stranded.
+                    # Otherwise a selective release failure can grow this list without
+                    # bound even when claim queries still succeed.
                     dispatched = 0
                 else:
-                    self._db_health.note_success()
+                    try:
+                        self.maybe_sweep()
+                        dispatched = self.dispatch_batch()
+                    except Exception:
+                        # Almost always the database going away underneath us. A
+                        # dispatcher that exits here is worse than useless: claimed work
+                        # waits for the dispatch timeout and nothing sweeps at all, so a
+                        # blip becomes an outage. Back off and try again.
+                        logger.warning(
+                            "Dispatcher iteration failed; backing off and retrying",
+                            exc_info=True,
+                        )
+                        self._db_health.note_failure()
+                        dispatched = 0
+                    else:
+                        if not self._pending_release:
+                            self._db_health.note_success()
 
-                delay = max(self._health.retry_delay, self._db_health.retry_delay)
+                delay = max(
+                    self._health.remaining_delay,
+                    self._db_health.remaining_delay,
+                )
                 if delay:
-                    # Something upstream is unhealthy. Wait rather than spinning on it.
+                    # Something upstream is unhealthy. Wait only the time still owed;
+                    # an elapsed broker delay must not be charged again to the database.
                     self._stop.wait(delay)
                     continue
                 if dispatched >= self.batch_size:
@@ -290,25 +324,33 @@ class Dispatcher:
         try:
             self.backend.release(task_ids)
         except Exception:
-            self._pending_release.extend(task_ids)
+            self._pending_release = list(dict.fromkeys([*self._pending_release, *task_ids]))
+            self._db_health.note_failure()
             logger.warning(
                 "Could not return %d claimed task(s) to pending; will retry",
                 len(task_ids),
                 exc_info=True,
             )
 
-    def _retry_pending_release(self) -> None:
-        """Re-attempt releases that failed while the database was unreachable."""
+    def _retry_pending_release(self) -> bool:
+        """Re-attempt stranded releases before claiming more work.
+
+        Returns ``False`` while the database still refuses the release, which tells
+        the loop to skip sweep and claim for this iteration.
+        """
         if not self._pending_release:
-            return
+            return True
         task_ids, self._pending_release = self._pending_release, []
         try:
             self.backend.release(task_ids)
         except Exception:
             self._pending_release = task_ids
+            self._db_health.note_failure()
             logger.warning("Still cannot return %d claimed task(s) to pending", len(task_ids))
-        else:
-            logger.info("Returned %d previously stranded task(s) to pending", len(task_ids))
+            return False
+        self._db_health.note_success()
+        logger.info("Returned %d previously stranded task(s) to pending", len(task_ids))
+        return True
 
     def stop(self) -> None:
         """Ask the loop to finish. Safe to call from a signal handler."""
@@ -368,7 +410,7 @@ class AsyncDispatcher:
     Behaviourally identical to :class:`Dispatcher` — same claim-commit-dispatch order,
     same immediate release and backoff on transport failure, same sweep tick, same
     "a full batch skips the wait" pacing. The pacing decisions themselves are shared
-    code (:class:`_TransportHealth`, :class:`_SweepClock`), so the two loops cannot
+    code (:class:`_BackoffState`, :class:`_SweepClock`), so the two loops cannot
     drift apart on the parts that matter.
 
     Exists because an asyncpg-only deployment should not have to add a synchronous
@@ -399,9 +441,13 @@ class AsyncDispatcher:
         self.batch_size = batch_size
         self.idle_poll_seconds = idle_poll_seconds
         self.sweep_interval_seconds = sweep_interval_seconds
-        self._health = _TransportHealth(dispatch_retry_base_seconds, dispatch_retry_cap_seconds)
+        self._health = _BackoffState(
+            "Transport", dispatch_retry_base_seconds, dispatch_retry_cap_seconds, monotonic
+        )
         # See the sync dispatcher: database failures recover on a shorter leash.
-        self._db_health = _TransportHealth(dispatch_retry_base_seconds, database_retry_cap_seconds)
+        self._db_health = _BackoffState(
+            "Database", dispatch_retry_base_seconds, database_retry_cap_seconds, monotonic
+        )
         self._sweep_clock = _SweepClock(sweep_interval_seconds, monotonic)
         self._stop = asyncio.Event()
         # See the sync dispatcher: stranded claims are retried, not left to the sweep.
@@ -468,25 +514,34 @@ class AsyncDispatcher:
                     break
                 iterations += 1
 
-                try:
-                    await self._retry_pending_release()
-                    await self.maybe_sweep()
-                    dispatched = await self.dispatch_batch()
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    # See the sync dispatcher: surviving a database blip is the whole
-                    # point of a long-running loop.
-                    logger.warning(
-                        "Dispatcher iteration failed; backing off and retrying",
-                        exc_info=True,
-                    )
-                    self._db_health.note_failure()
+                release_ready = await self._retry_pending_release()
+                if not release_ready:
+                    # Match the sync loop: never accumulate fresh claims while rows
+                    # already owned by this dispatcher remain stranded.
                     dispatched = 0
                 else:
-                    self._db_health.note_success()
+                    try:
+                        await self.maybe_sweep()
+                        dispatched = await self.dispatch_batch()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        # See the sync dispatcher: surviving a database blip is the whole
+                        # point of a long-running loop.
+                        logger.warning(
+                            "Dispatcher iteration failed; backing off and retrying",
+                            exc_info=True,
+                        )
+                        self._db_health.note_failure()
+                        dispatched = 0
+                    else:
+                        if not self._pending_release:
+                            self._db_health.note_success()
 
-                delay = max(self._health.retry_delay, self._db_health.retry_delay)
+                delay = max(
+                    self._health.remaining_delay,
+                    self._db_health.remaining_delay,
+                )
                 if delay:
                     await self._sleep(delay)
                     continue
@@ -509,25 +564,29 @@ class AsyncDispatcher:
         try:
             await self.backend.release(task_ids)
         except Exception:
-            self._pending_release.extend(task_ids)
+            self._pending_release = list(dict.fromkeys([*self._pending_release, *task_ids]))
+            self._db_health.note_failure()
             logger.warning(
                 "Could not return %d claimed task(s) to pending; will retry",
                 len(task_ids),
                 exc_info=True,
             )
 
-    async def _retry_pending_release(self) -> None:
-        """Re-attempt releases that failed while the database was unreachable."""
+    async def _retry_pending_release(self) -> bool:
+        """Re-attempt stranded releases before claiming more work."""
         if not self._pending_release:
-            return
+            return True
         task_ids, self._pending_release = self._pending_release, []
         try:
             await self.backend.release(task_ids)
         except Exception:
             self._pending_release = task_ids
+            self._db_health.note_failure()
             logger.warning("Still cannot return %d claimed task(s) to pending", len(task_ids))
-        else:
-            logger.info("Returned %d previously stranded task(s) to pending", len(task_ids))
+            return False
+        self._db_health.note_success()
+        logger.info("Returned %d previously stranded task(s) to pending", len(task_ids))
+        return True
 
     async def _sleep(self, seconds: float) -> None:
         """Sleep, but wake immediately if asked to stop."""

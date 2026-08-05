@@ -650,3 +650,64 @@ class TestDatabaseBackoffIsShorterThanTransport:
 
         assert dispatcher._health.retry_delay > 0  # transport is unhealthy
         assert dispatcher._db_health.retry_delay == 0.0  # the database is fine
+
+    def test_an_elapsed_transport_delay_is_not_charged_again_to_the_database(self, backend):
+        """Backoff steps are not the same thing as remaining sleep time."""
+        clock = [0.0]
+        dispatcher = Dispatcher(backend, lambda task_id: None, monotonic=lambda: clock[0])
+        for _ in range(20):
+            dispatcher._health.note_failure()
+
+        assert dispatcher._health.retry_delay == 30.0
+        clock[0] = 30.0  # the broker's wait has already elapsed
+        dispatcher._db_health.note_failure()
+
+        assert dispatcher._health.remaining_delay == 0.0
+        assert dispatcher._db_health.remaining_delay == 1.0
+        assert (
+            max(
+                dispatcher._health.remaining_delay,
+                dispatcher._db_health.remaining_delay,
+            )
+            == 1.0
+        )
+
+    def test_a_stranded_release_blocks_new_claims_until_it_is_written(self, backend, session):
+        """Selective release failure must not accumulate more DISPATCHING rows."""
+        first = create_task(session, task_type="t")
+        second = create_task(session, task_type="t")
+        session.commit()
+
+        def broken_release(task_ids) -> None:
+            raise ConnectionError("release unavailable")
+
+        def broken_transport(task_id: str) -> None:
+            raise ConnectionError("redis is down")
+
+        backend.release = broken_release  # type: ignore[method-assign]
+        dispatcher = Dispatcher(
+            backend,
+            broken_transport,
+            batch_size=1,
+            idle_poll_seconds=0.001,
+            sweep_interval_seconds=None,
+            dispatch_retry_base_seconds=0.001,
+            database_retry_cap_seconds=0.005,
+        )
+        dispatcher.dispatch_batch()
+        assert dispatcher._pending_release == [first.id]
+
+        real_claim = backend.claim
+        claim_calls = []
+
+        def counted_claim(limit: int) -> list[str]:
+            claim_calls.append(limit)
+            return real_claim(limit)
+
+        backend.claim = counted_claim  # type: ignore[method-assign]
+        dispatcher.run(max_iterations=1)
+
+        assert claim_calls == []
+        assert dispatcher._pending_release == [first.id]
+        assert _status(session, first.id) == TaskStatus.DISPATCHING.value
+        assert _status(session, second.id) == TaskStatus.PENDING.value

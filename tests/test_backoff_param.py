@@ -89,8 +89,3 @@ class TestAsyncTaskBackoff:
         row = result.one()
         delta = (row.scheduled_for - before).total_seconds()
         assert 2 <= delta <= 8, f"expected ~3s, got {delta}s"
-
-
-# ---------------------------------------------------------------------------
-# Notifications
-# ---------------------------------------------------------------------------

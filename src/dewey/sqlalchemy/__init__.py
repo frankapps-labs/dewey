@@ -1,4 +1,4 @@
-"""SQLAlchemy integration for dewey — sync + async executor, sweep, queries, notifications."""
+"""SQLAlchemy integration for Dewey — sync/async execution, dispatch, sweep, and queries."""
 
 # Async API
 from dewey.sqlalchemy.async_executor import create_task_async, process_task_async

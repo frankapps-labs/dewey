@@ -86,15 +86,16 @@ string to be reused.
   level (so Django's app registry is never touched too early), which means a missing
   Django can only surface on first use.
 - A claim the dispatcher could not return to `PENDING` — because the database was the
-  thing that broke — is now remembered and retried on the next iteration instead of being
-  left to the dispatch-timeout sweep. Previously a four-second blip stranded work in
-  `DISPATCHING` for up to `dispatch_timeout_seconds` (300s by default), long after the
-  database had recovered. Found by the resilience lab, which showed rows sitting in
-  `DISPATCHING` for an entire run.
+  thing that broke — is now remembered and retried before any new work is claimed instead
+  of being left to the dispatch-timeout sweep. IDs stay deduplicated until the release is
+  written. Previously a four-second blip stranded work in `DISPATCHING` for up to
+  `dispatch_timeout_seconds` (300s by default), long after the database had recovered.
+  Found by the resilience lab, which showed rows sitting in `DISPATCHING` for an entire run.
 - Database failures now back off on their own shorter curve (1s doubling to 5s) rather
-  than sharing the transport's 1s→30s. A remote broker deserves a long leash; the database
-  we are already connected to does not, and a 30s sleep after Postgres returns is wasted
-  recovery time.
+  than sharing the transport's 1s→30s. Backoff tracks the remaining deadline separately
+  from its exponential step, so an already-served broker delay cannot be charged again to
+  database recovery. A remote broker deserves a long leash; the database we are already
+  connected to does not.
 - Both dispatchers now survive a database outage. Previously an exception from
   `claim()` — the shape a Postgres blip takes — escaped the run loop and ended the
   dispatcher process, so claimed work waited for the dispatch timeout and nothing swept

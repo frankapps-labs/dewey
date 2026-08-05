@@ -2,7 +2,7 @@
 
 **Status:** awaiting human approval. Nothing is tagged and nothing is published.
 **Branch:** `release/0.4.0`
-**Date:** 2026-07-30
+**Date:** 2026-08-05
 
 ---
 
@@ -119,12 +119,12 @@ All at the head of this branch.
 | Gate | Result |
 |---|---|
 | `make lint` | All checks passed |
-| `make format-check` | 82 files already formatted |
+| `make format-check` | 71 files already formatted |
 | `make typecheck` (basedpyright) | 0 errors, 0 warnings, 0 notes |
-| `make test` (local Postgres 16) | **441 passed**, 92% coverage |
-| `make test-integration` (compose Postgres + Redis) | **441 passed** |
+| `make test` (local Postgres 16) | **445 passed**, 93% coverage |
+| `make test-integration` (compose Postgres + Redis) | **445 passed** |
 | Multi-dispatcher concurrency (4 threads, 60 tasks, real Postgres) | pass — every task claimed exactly once |
-| Resilience lab, ADR-003 suite (11 scenarios, chaos) | **verdict PASS** |
+| Resilience lab, ADR-003 suite (10 scenarios, chaos) | **verdict PASS**, plus `worker-kill-check` |
 | Huey 2.5.5 adapter suite | 17 passed |
 | `uv build` | `dewey-0.4.0.tar.gz`, `dewey-0.4.0-py3-none-any.whl` |
 | `twine check dist/*` | PASSED (both) |
@@ -165,9 +165,10 @@ Worth recording because each would have shipped silently:
 5. **A stranded claim waited out the dispatch timeout.** When the database died
    mid-dispatch, the release could not be written, so rows sat in `DISPATCHING` until the
    timeout sweep — 300s by default — recovered them. The lab showed 12 rows stuck for an
-   entire run. The dispatcher knows which IDs it holds, so it now retries the release each
-   iteration and the timeout sweep is only the crash backstop. Database failures also got
-   their own shorter backoff cap (5s vs the transport's 30s).
+   entire run. The dispatcher now retries known releases before claiming more work and
+   keeps their IDs deduplicated until the write succeeds; the timeout sweep is only the
+   crash backstop. Database failures use a separate 5s-capped backoff with elapsed-deadline
+   tracking, so a broker's already-served 30s delay cannot be charged to database recovery.
 6. **A database blip killed the dispatcher.** An exception from `claim()` escaped the run
    loop and ended the process, so claimed work then waited for the dispatch timeout and
    nothing swept at all. Found by the resilience lab's `db-outage` scenario, which failed
@@ -200,7 +201,7 @@ Worth recording because each would have shipped silently:
 
 | Deferred | Why |
 |---|---|
-| Notification delivery (email/webhook/Slack channels) | Removed rather than deprecated. Returns as task types with channel handlers, with attempt history on the task ledger |
+| Notification delivery (email/webhook/Slack channels) | Removed rather than deprecated. Future companion tooling can use channel handlers backed by ordinary Dewey tasks without adding another execution engine |
 | ADR-004 safety checks (`dewey check`, safety metadata, `docs/task-safety.md`) | Would add a second, larger policy vocabulary before the first has been used in production |
 | DB runtime policy overrides | No admin surface to drive them; resolver is already layered for it |
 | Lifecycle hooks (`on_complete` / `on_fail` / `on_retry`) | No consumer needs them, and the latency payload wants designing with them |
@@ -213,51 +214,40 @@ Worth recording because each would have shipped silently:
 
 ## Resilience lab
 
-**Re-run 2026-08-05 against the de-notified head: PASS, 10/10 scenarios**, plus
-`worker-kill-check`. The suite found two further dispatcher defects on this pass — the
-stranded-claim timeout and the shared backoff curve — both fixed above. The
-`notification-pressure` scenario retires with the layer it exercised.
+The private lab was de-notified and rerun against Dewey `f0e7eb5` after the notification
+layer's removal. Its testbed uses `@dewey.task`, `kwargs=`, and `AsyncDispatcher` rather
+than a hand-rolled claim/sweep loop.
 
-The private lab's testbed was migrated to the 0.4 API (`@dewey.task` declarations,
-`kwargs=`, and `AsyncDispatcher` replacing its hand-rolled claim and sweep loops) and the
-ADR-003 release suite was run against this head.
-
-**Verdict: PASS**, all 11 scenarios:
+**Verdict: PASS — 10/10 scenarios, plus `worker-kill-check`.**
 
 | Scenario | Drain | p95 accept |
 |---|---|---|
-| release-check | 41.81s | 121.16ms |
-| db-sleep | 6.07s | 18.17ms |
-| db-latency (Toxiproxy latency injection) | 10.59s | 11.31ms |
-| db-outage (Postgres disabled mid-flight) | 63.01s | 10.59ms |
-| priority-lane | 3.06s | 29.93ms |
-| priority-lane-batch-pressure | 16.38s | 119.62ms |
-| wake-on-insert-trickle | 60.69s | 12.58ms |
-| cohabitation | 20.18s | 13.34ms |
-| cohabitation-chaos | 31.34s | 1771.60ms |
-| resilience-long | 30.30s | 13.68ms |
-| notification-pressure | 42.43s | 12.66ms |
+| release-check | 41.71s | 111.37ms |
+| db-sleep | 6.06s | 11.32ms |
+| db-latency (Toxiproxy) | 10.10s | 9.00ms |
+| db-outage (Postgres disabled mid-flight) | 64.74s | 15.80ms |
+| priority-lane | 3.05s | 27.57ms |
+| priority-lane-batch-pressure | 16.25s | 106.21ms |
+| wake-on-insert-trickle | 60.59s | 13.83ms |
+| cohabitation | 20.15s | 16.51ms |
+| cohabitation-chaos | 30.36s | 1019.10ms |
+| resilience-long | 75.80s | 19.14ms |
 
-The `notification-pressure` scenario exercised the notification ledger, which this release
-no longer contains. It passed at the time and is recorded for completeness; it retires with
-the layer.
+`notification-pressure` retired with the layer it exercised. `worker-kill-check` passed
+with one completed task and zero dead. Release-check improved over its May baseline
+(125.64ms p95, 45.94s drain) to 111.37ms and 41.71s.
 
-Plus `worker-kill-check`: passed, 1 completed, 0 dead — a task in flight when its worker
-is killed recovers and completes.
+The rerun found the stranded-release and coupled-backoff defects described above. Three
+consecutive `db-outage` runs passed after the fixes with no rows left in `DISPATCHING`.
+Its ~63s recovery is governed by the lab's one-minute stuck-processing threshold: a
+handler whose database connection dies cannot write its outcome and is indistinguishable
+from a killed worker until the sweep. That is expected at-least-once recovery behavior,
+not a release defect.
 
-No accept-latency regression against the pre-0.4 baselines recorded in May:
-
-| Scenario | May baseline | Now |
-|---|---|---|
-| release-check | 125.64ms p95, 45.94s drain | 124.88ms, 41.84s |
-| cold-burst | 136.36ms p95 | 118.57ms |
-
-One lab-side finding, not a Dewey defect: the `burst` scenario fails its
-`max_p95_accept_ms: 100` gate at ~177ms. It has no warmup block, so it measures cold
-connection-pool opening against a steady-state threshold — which is what `cold-burst`
-exists to measure, at a 300ms gate, and which the lab's own `release-suite` help text
-already documents ("without [warmup] the same scenario comes in ~175ms"). The gate wants
-recalibrating in the lab; it is not a release blocker.
+The run used scenario copies on a shifted port with `--skip-compare`, so baselines were
+not promoted. The standalone `burst` scenario still has a known cold-pool threshold
+miscalibration. Neither changes the release-suite verdict; details are retained in the
+lab's `reports/latest.md` at `f1e7671`.
 
 ## Before publishing
 
@@ -268,9 +258,9 @@ recalibrating in the lab; it is not a release blocker.
 3. ~~**Decide on the notification layer.**~~ **Decided and executed: removed from 0.4.0**,
    not deprecated. Shipping it experimental would have written two tables into the initial
    Django migration for every consumer, and that migration is the one artifact that cannot
-   be cheaply revised later. It returns on the task engine's foundations — a task type with
-   a channel handler, plus per-attempt history promoted to the task ledger for all task
-   types. Archived on `archive/notification-ledger-0.4`.
+   be cheaply revised later. Future companion tooling can build channel handlers on ordinary
+   Dewey tasks without adding another execution engine. Archived on
+   `archive/notification-ledger-0.4`.
 4. Merge `release/0.4.0` → `main` (`make release` requires `main`).
 5. Tag `v0.4.0` and push; `.github/workflows/publish.yml` publishes on tag via trusted
    publishing.
@@ -278,9 +268,9 @@ recalibrating in the lab; it is not a release blocker.
 
 ## Publication checklist
 
-- [x] Resilience lab run green against this head (11/11 scenarios, verdict PASS)
+- [x] Resilience lab run green against the post-removal release head (10/10 scenarios + worker-kill, verdict PASS)
 - [x] PyPI project ownership confirmed (maintainer owns the `dewey` project)
-- [ ] `archive/celery-adapter-enqueue-era` pushed, so the changelog's reference to it is
+- [x] `archive/celery-adapter-enqueue-era` pushed, so the changelog's reference to it is
       true for anyone reading it
 - [ ] `release/0.4.0` merged to `main`, CI green there
 - [ ] `CHANGELOG.md` heading dated

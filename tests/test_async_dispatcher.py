@@ -394,7 +394,7 @@ class TestSurvivesDatabaseOutage:
         assert seen == [task.id]
         assert dispatcher._db_health.retry_delay == 0.0
 
-    async def test_a_failing_release_leaves_the_row_for_the_sweep(self, backend, async_session):
+    async def test_a_failing_release_is_remembered_for_retry(self, backend, async_session):
         task = await create_task_async(async_session, task_type="t")
         await async_session.commit()
 
@@ -408,7 +408,61 @@ class TestSurvivesDatabaseOutage:
         dispatcher = AsyncDispatcher(backend, broken_transport, sweep_interval_seconds=None)
 
         assert await dispatcher.dispatch_batch() == 0  # did not raise
+        assert dispatcher._pending_release == [task.id]
         assert await _status(async_session, task.id) == TaskStatus.DISPATCHING.value
+
+    async def test_a_stranded_release_blocks_new_claims_until_it_is_written(
+        self, backend, async_session
+    ):
+        first = await create_task_async(async_session, task_type="t")
+        second = await create_task_async(async_session, task_type="t")
+        await async_session.commit()
+
+        async def broken_release(task_ids) -> None:
+            raise ConnectionError("release unavailable")
+
+        async def broken_transport(task_id: str) -> None:
+            raise ConnectionError("redis is down")
+
+        backend.release = broken_release  # type: ignore[method-assign]
+        dispatcher = AsyncDispatcher(
+            backend,
+            broken_transport,
+            batch_size=1,
+            idle_poll_seconds=0.001,
+            sweep_interval_seconds=None,
+            dispatch_retry_base_seconds=0.001,
+            database_retry_cap_seconds=0.005,
+        )
+        await dispatcher.dispatch_batch()
+        assert dispatcher._pending_release == [first.id]
+
+        real_claim = backend.claim
+        claim_calls = []
+
+        async def counted_claim(limit: int) -> list[str]:
+            claim_calls.append(limit)
+            return await real_claim(limit)
+
+        backend.claim = counted_claim  # type: ignore[method-assign]
+        await dispatcher.run(max_iterations=1)
+
+        assert claim_calls == []
+        assert dispatcher._pending_release == [first.id]
+        assert await _status(async_session, first.id) == TaskStatus.DISPATCHING.value
+        assert await _status(async_session, second.id) == TaskStatus.PENDING.value
+
+    async def test_elapsed_transport_delay_does_not_extend_database_delay(self, backend):
+        clock = [0.0]
+        dispatcher = AsyncDispatcher(backend, lambda task_id: None, monotonic=lambda: clock[0])
+        for _ in range(20):
+            dispatcher._health.note_failure()
+
+        clock[0] = 30.0
+        dispatcher._db_health.note_failure()
+
+        assert dispatcher._health.remaining_delay == 0.0
+        assert dispatcher._db_health.remaining_delay == 1.0
 
     async def test_cancellation_still_wins_over_the_retry_loop(self, backend):
         """Surviving errors must not make the dispatcher unkillable."""

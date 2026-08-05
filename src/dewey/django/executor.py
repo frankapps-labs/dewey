@@ -158,7 +158,7 @@ def process_task(
     task_metadata = dict(task.metadata or {})
     policy = resolve_policy(task_type)
 
-    # Restore the trace context captured at task/notification creation
+    # Restore the trace context captured at task creation
     # time so every log line through Phase 2 and Phase 3 is correlated
     # with the originating request.
     _trace_token = set_trace_context(extract_trace_context(task_metadata))

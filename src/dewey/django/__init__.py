@@ -1,8 +1,8 @@
-"""Django adapter for dewey — models, executor, sweep, queries, notifications.
+"""Django adapter for Dewey — models, executor, sweep, and queries.
 
 Everything here is imported lazily. Dewey's Django models must not be imported
-before Django's app registry is ready, and a consumer that only produces tasks
-should not pay for the notification layer.
+before Django's app registry is ready, and producers should not pay import-time
+cost for worker and operational APIs they do not use.
 """
 
 from importlib import import_module

@@ -179,9 +179,9 @@ On `0.x` the public API may change between minor versions. `1.0` waits until the
 been proven by real production use.
 
 The release is deliberately one thing: durable task delivery. Multi-channel notification
-delivery is **not** part of it — an earlier ledger for that was removed before publishing
-rather than shipped half-committed, and the shape it should return in is a task type with
-a channel handler.
+delivery is **not** part of it — an earlier parallel ledger was removed before publishing
+rather than shipped half-committed. Future notification tooling can build channel handlers
+on ordinary Dewey tasks without adding another execution engine.
 
 ## Development
 

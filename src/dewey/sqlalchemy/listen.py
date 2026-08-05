@@ -1,8 +1,8 @@
 """Postgres LISTEN/NOTIFY helpers for wake-on-insert workers.
 
 These helpers are optional accelerators: Dewey's durable source of truth is
-still the task/notification tables. A missed or dropped NOTIFY is harmless as
-long as workers retain a periodic fallback poll/sweep.
+the task ledger. A missed or dropped NOTIFY is harmless as long as dispatchers
+retain their periodic fallback poll and recovery sweep.
 """
 
 from __future__ import annotations
