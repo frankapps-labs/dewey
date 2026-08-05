@@ -155,7 +155,10 @@ integration target.
 
 - [ ] Coveralls coverage upload.
 - [ ] GitHub CodeQL for Python.
-- [ ] Dependency audit (`pip-audit` or equivalent).
+- [x] Dependency audit. An OSV query over the locked set runs clean (Django, Huey,
+      SQLAlchemy, asyncpg, psycopg2); CI now runs `pip-audit` over the exported
+      lockfile as an advisory job, since pip-audit cannot build its temp venv on
+      this dev machine.
 - [ ] Evaluate Snyk free OSS integration once the public repo is settled.
 - [ ] Optional later: Dependabot/Renovate and OpenSSF Scorecard.
 
@@ -176,9 +179,12 @@ integration target.
 - [ ] Add an explicit production `resource_profile` / deployment-profile setting.
       Dewey should fail closed outside test/dev mode unless the app chooses a
       supported profile such as `cohabiting` or `dedicated-db`.
-- [ ] Document Postgres-first semantics: Postgres is the durable ledger and
-      source of truth; Redis/RabbitMQ/Postgres NOTIFY are optional wake-up
-      accelerators only. Lost broker messages must be harmless.
+- [x] Documented Postgres-first semantics: README opens on it ("losing the broker
+      costs you latency, it cannot cost you work"), `docs/concepts.md` has
+      "Postgres is the scheduler" and states that polling is the correctness path
+      while LISTEN only shortens the wait, and `docs/adapters.md` describes what a
+      broker outage looks like. Proven by the broker-outage legs of the
+      installed-wheel smoke and the lab's `db-outage` scenario.
 - [x] Documented the cohabiting setup in `docs/getting-started.md`: separate
       engine/session factory for Dewey, bounded pool, `max_overflow=0`,
       `pool_timeout`, statement/lock/idle-transaction timeouts, the extra LISTEN
@@ -206,10 +212,10 @@ sustained insert pressure.
       new Dewey extra.
 - [x] Keep the listener contract validated through library tests and future
       installed-wheel smoke tests.
-- [ ] Re-run priority-lane and batch-pressure integration scenarios and
-      re-baseline. Expectation: eager queue p95 closes toward handler runtime
-      and accept-latency regressions from tight polling disappear because the
-      worker no longer polls under load.
+- [~] Re-ran `priority-lane` and `priority-lane-batch-pressure` against the
+      dispatcher architecture: both pass (3.06s and 16.38s drain). Baselines were
+      *not* promoted — the run used scenario copies on a non-default port and
+      `--skip-compare` — so re-baselining on the canonical scenarios is still to do.
 
 ## Lifecycle hooks — latency payload (future)
 

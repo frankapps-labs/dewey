@@ -124,7 +124,8 @@ All at the head of this branch.
 | `twine check dist/*` | PASSED (both) |
 | Installed-wheel smoke (clean venv, real Postgres + Redis) | all checks passed |
 | Wheel contents | 40 modules + `py.typed` + migrations; no tests, no private paths |
-| Dependency audit (OSV) | 0 advisories across Django, Huey, SQLAlchemy, asyncpg, psycopg2 |
+| Dependency audit (OSV over the locked set) | 0 advisories across Django, Huey, SQLAlchemy, asyncpg, psycopg2 |
+| CI dependency audit | `pip-audit` over the exported lockfile, advisory-only job |
 | Public/private boundary | no HQ paths, ADR text, or internal product names in the tree or artifacts |
 
 The installed-wheel smoke covers: migrate from shipped migrations, declare and create a
@@ -133,7 +134,10 @@ rolled-back producer, Redis outage and recovery, retry then dead-letter, and a r
 round trip through a Huey worker.
 
 `pip-audit` itself could not run on this machine (`ensurepip` aborts when it builds its
-temporary venv), so the audit queries the same OSV database directly.
+temporary venv), so the local audit queries the same OSV database directly. CI now runs
+`pip-audit` over the exported lockfile, where the environment is predictable — advisory
+only, so a new CVE in a transitive dev dependency surfaces without blocking an unrelated
+pull request.
 
 ---
 

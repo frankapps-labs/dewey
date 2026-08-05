@@ -205,6 +205,29 @@ jobs:
       - name: Run the installed-wheel smoke test
         run: ./scripts/wheel_smoke.sh
 
+  audit:
+    # pip-audit cannot build its temp venv on some dev machines (ensurepip aborts), so
+    # the audit lives here where the environment is predictable. Advisory-only: a new
+    # CVE in a transitive dev dependency should surface, not block an unrelated PR.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Export the locked dependency set
+        run: uv export --format requirements-txt --no-hashes --no-emit-project > requirements-audit.txt
+
+      - name: Audit dependencies
+        run: uvx pip-audit --no-deps -r requirements-audit.txt
+
   build:
     runs-on: ubuntu-latest
     steps:
