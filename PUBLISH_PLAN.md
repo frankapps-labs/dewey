@@ -179,12 +179,13 @@ integration target.
 - [ ] Document Postgres-first semantics: Postgres is the durable ledger and
       source of truth; Redis/RabbitMQ/Postgres NOTIFY are optional wake-up
       accelerators only. Lost broker messages must be harmless.
-- [ ] Document FastAPI cohabiting setup: separate SQLAlchemy engine/session
-      factory for Dewey, bounded pool, `max_overflow=0`, `pool_timeout`,
-      statement/lock/idle transaction timeouts, and ideally a separate DB role
-      with a connection limit.
-- [ ] Document Django future setup: separate `DATABASES["dewey"]` alias and
-      database router, even when pointing at the same physical Postgres DB.
+- [x] Documented the cohabiting setup in `docs/getting-started.md`: separate
+      engine/session factory for Dewey, bounded pool, `max_overflow=0`,
+      `pool_timeout`, statement/lock/idle-transaction timeouts, the extra LISTEN
+      connection to budget for, and a separate DB role with a connection limit.
+      Grounded in the lab's cohabitation scenarios rather than guesswork.
+- [x] Documented the Django alias + router setup, including the `DEWEY["DATABASE"]`
+      setting that already routes Dewey's own queries to it.
 
 ## Wake-on-insert in Dewey core (LISTEN/NOTIFY)
 

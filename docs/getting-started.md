@@ -288,6 +288,74 @@ shuts it down cleanly; `stop()` lets it finish the current pass first.
 
 ---
 
+## Sharing a database with your application
+
+Dewey and your request handlers usually live on the same physical Postgres. That is fine,
+and it is the deployment the resilience lab exercises — but only if Dewey gets its own
+connection budget rather than competing for your API's.
+
+**Give Dewey a separate engine with a bounded pool.** The failure you are avoiding is a
+dispatcher claim query or a batch of workers exhausting the pool your request handlers
+need, turning background pressure into user-visible latency.
+
+```python
+# Your API keeps its own engine, sized for request concurrency.
+api_engine = create_async_engine(DATABASE_URL, pool_size=10, max_overflow=5)
+
+# Dewey gets its own, deliberately small and hard-capped.
+dewey_engine = create_async_engine(
+    DATABASE_URL,
+    pool_size=2,
+    max_overflow=0,   # a hard ceiling: never borrow from the headroom the API needs
+    pool_timeout=5,   # fail fast instead of queueing behind background work
+)
+```
+
+`max_overflow=0` is the important one. With overflow allowed, a burst of dispatcher and
+worker activity can open connections without limit until Postgres refuses them — and the
+process that gets refused is as likely to be a request handler as a worker.
+
+**Budget one extra connection for LISTEN.** The dispatcher holds a dedicated connection
+for the whole time it runs, because a connection parked in `LISTEN` cannot serve anything
+else. It is taken outside the pool, so count it separately: one per dispatcher process.
+
+**Set server-side timeouts on Dewey's role**, so a pathological query cannot hold locks
+indefinitely:
+
+```sql
+ALTER ROLE dewey SET statement_timeout = '30s';
+ALTER ROLE dewey SET lock_timeout = '5s';
+ALTER ROLE dewey SET idle_in_transaction_session_timeout = '60s';
+```
+
+A separate database role is worth it if you can manage one: it gives you a
+`CONNECTION LIMIT` Dewey physically cannot exceed, and makes Dewey's share legible in
+`pg_stat_activity`.
+
+For Django, point Dewey at its own alias and let the settings contract use it:
+
+```python
+DATABASES = {
+    "default": {...},
+    "dewey": {..., "CONN_MAX_AGE": 0, "OPTIONS": {"pool": {"max_size": 2}}},
+}
+DEWEY = {"DISPATCH": "myapp.tasks.adapter.dispatch", "DATABASE": "dewey"}
+```
+
+You will want a database router so Dewey's models resolve to that alias. Pointing at the
+same physical database through a second alias is a legitimate configuration — the point is
+the separate connection budget, not a separate server.
+
+**What the lab measures.** Its `cohabitation` and `cohabitation-chaos` scenarios run
+sustained tenant traffic (`SELECT pg_sleep`) against the same Postgres as a live
+dispatcher, with an API pool of 10+5 and a Dewey pool of 2+0, and gate on four things: the
+wake-up path still fires promptly, the worker still completes work, the API's own failure
+ratio stays near zero, and cohabitation latency stays bounded. Both pass. Those pool
+numbers are a reasonable starting point, not a universal answer — the shape to copy is
+"small, hard-capped, and separate".
+
+---
+
 ## Without a broker
 
 The transport is just a function that takes a task ID. In a single process, that can be

@@ -158,12 +158,15 @@ path. `DEAD → PENDING` is a manual retry.
   that is merely waiting gets reclaimed and dispatched twice.
 - **Dewey owns retry, not your broker.** The Huey adapter registers with `retries=0` on
   purpose: two retry engines over one task is how work runs twice.
+- **Give Dewey its own bounded connection pool** when it shares a database with your
+  request handlers, so background pressure cannot become user-visible latency. See
+  [sharing a database](docs/getting-started.md#sharing-a-database-with-your-application).
 
 ## Documentation
 
 | Guide | What it covers |
 |---|---|
-| [Getting started](docs/getting-started.md) | SQLAlchemy sync, SQLAlchemy async, and Django, end to end |
+| [Getting started](docs/getting-started.md) | SQLAlchemy sync, SQLAlchemy async, and Django, end to end, plus sharing a database with your app |
 | [Concepts](docs/concepts.md) | States, claims, policy resolution, and the limits of what Dewey guarantees |
 | [Adapters](docs/adapters.md) | The transport contract, and writing your own |
 | [From Huey or Celery](docs/onboarding/from-huey-celery.md) | Pattern-by-pattern migration, one task type at a time |

@@ -70,6 +70,9 @@ string to be reused.
   transport. Any number of dispatchers cooperate without a leader election.
   Backends: `dewey.sqlalchemy.dispatch.SQLAlchemyDispatchBackend` and
   `dewey.django.dispatch.DjangoDispatchBackend`.
+- Documented how to cohabit with your application's database: a separate engine with a
+  bounded pool and `max_overflow=0`, the extra connection a dispatcher holds for LISTEN,
+  server-side statement/lock/idle timeouts, and the Django alias-plus-router setup.
 - Reaching for `dewey.django` without Django installed now says what to install rather
   than raising a bare `No module named 'django'`. The package imports nothing at module
   level (so Django's app registry is never touched too early), which means a missing
