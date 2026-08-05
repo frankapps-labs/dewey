@@ -31,24 +31,6 @@ _LAZY: dict[str, str] = {
     "bulk_retry": "dewey.django.queries",
     "kill_task": "dewey.django.queries",
     "purge_completed": "dewey.django.queries",
-    # Notifications (experimental — see docs/notifications.md)
-    "create_notification": "dewey.django.notifications",
-    "create_notifications_for_event": "dewey.django.notifications",
-    "send_notification": "dewey.django.notifications",
-    "process_notification": "dewey.django.notifications",
-    "sweep_notifications": "dewey.django.notifications",
-    "sweep_failed_notifications": "dewey.django.notifications",
-    "sweep_stuck_notifications": "dewey.django.notifications",
-    "get_notification": "dewey.django.notifications",
-    "get_notification_attempts": "dewey.django.notifications",
-    "get_notification_stats": "dewey.django.notifications",
-    "get_notifications_for_task": "dewey.django.notifications",
-    "get_pending_notifications": "dewey.django.notifications",
-    "get_failed_notifications": "dewey.django.notifications",
-    "get_dead_notifications": "dewey.django.notifications",
-    "retry_notification": "dewey.django.notifications",
-    "kill_notification": "dewey.django.notifications",
-    "purge_sent_notifications": "dewey.django.notifications",
 }
 
 if TYPE_CHECKING:  # re-exported for type checkers and IDE completion
@@ -57,57 +39,6 @@ if TYPE_CHECKING:  # re-exported for type checkers and IDE completion
     )
     from dewey.django.executor import (
         process_task as process_task,
-    )
-    from dewey.django.notifications import (
-        create_notification as create_notification,
-    )
-    from dewey.django.notifications import (
-        create_notifications_for_event as create_notifications_for_event,
-    )
-    from dewey.django.notifications import (
-        get_dead_notifications as get_dead_notifications,
-    )
-    from dewey.django.notifications import (
-        get_failed_notifications as get_failed_notifications,
-    )
-    from dewey.django.notifications import (
-        get_notification as get_notification,
-    )
-    from dewey.django.notifications import (
-        get_notification_attempts as get_notification_attempts,
-    )
-    from dewey.django.notifications import (
-        get_notification_stats as get_notification_stats,
-    )
-    from dewey.django.notifications import (
-        get_notifications_for_task as get_notifications_for_task,
-    )
-    from dewey.django.notifications import (
-        get_pending_notifications as get_pending_notifications,
-    )
-    from dewey.django.notifications import (
-        kill_notification as kill_notification,
-    )
-    from dewey.django.notifications import (
-        process_notification as process_notification,
-    )
-    from dewey.django.notifications import (
-        purge_sent_notifications as purge_sent_notifications,
-    )
-    from dewey.django.notifications import (
-        retry_notification as retry_notification,
-    )
-    from dewey.django.notifications import (
-        send_notification as send_notification,
-    )
-    from dewey.django.notifications import (
-        sweep_failed_notifications as sweep_failed_notifications,
-    )
-    from dewey.django.notifications import (
-        sweep_notifications as sweep_notifications,
-    )
-    from dewey.django.notifications import (
-        sweep_stuck_notifications as sweep_stuck_notifications,
     )
     from dewey.django.queries import (
         bulk_retry as bulk_retry,
@@ -163,41 +94,24 @@ if TYPE_CHECKING:  # re-exported for type checkers and IDE completion
 
 __all__ = [
     "bulk_retry",
-    "create_notification",
-    "create_notifications_for_event",
     "create_task",
     "get_dead",
-    "get_dead_notifications",
     "get_dispatching",
     "get_failed",
-    "get_failed_notifications",
-    "get_notification",
-    "get_notification_attempts",
-    "get_notification_stats",
-    "get_notifications_for_task",
     "get_pending",
-    "get_pending_notifications",
     "get_processing",
     "get_recent",
     "get_stats",
     "get_stuck",
     "get_task",
-    "kill_notification",
     "kill_task",
-    "process_notification",
     "process_task",
     "purge_completed",
-    "purge_sent_notifications",
-    "retry_notification",
     "retry_task",
-    "send_notification",
     "sweep",
     "sweep_dispatching",
     "sweep_failed",
-    "sweep_failed_notifications",
-    "sweep_notifications",
     "sweep_stuck",
-    "sweep_stuck_notifications",
 ]
 
 

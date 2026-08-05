@@ -132,8 +132,9 @@ Django remains supported, but Django-specific operational polish does not block
 the first public pre-release unless a Django consumer becomes the first
 integration target.
 
-- [x] Initial Django migrations for task and notification models, shipped in the
-      wheel, with a test that fails if models and migrations drift.
+- [x] Initial Django migration for the task model, shipped in the wheel, with a test
+      that fails if models and migrations drift. One table: `task_entries`. The
+      notification models were removed from this release rather than migrated.
 - [x] `python manage.py migrate` verified on a fresh database, plus rollback and
       reapply, and the partial-index DDL inspected in real Postgres.
 - [x] `dewey[django]` smoke-tested from the built wheel.

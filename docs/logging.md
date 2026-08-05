@@ -22,7 +22,7 @@ in your logs.
 
 Dewey is a library, not a framework — it never configures logging. Every
 Dewey log goes through a logger under the `dewey.*` namespace
-(`dewey.sqlalchemy.executor`, `dewey.django.notifications`, etc.), so you
+(`dewey.sqlalchemy.executor`, `dewey.django.executor`, etc.), so you
 wire it up like any other library:
 
 ```python
@@ -46,7 +46,7 @@ time) runs the task, the handler raises — and you can't tie the error back
 to the originating request.
 
 Dewey solves this with a library-agnostic carrier: a `ContextVar[dict]`
-that round-trips through `metadata["trace"]` on the task/notification row.
+that round-trips through `metadata["trace"]` on the task row.
 
 ```python
 from dewey.core.logging import (

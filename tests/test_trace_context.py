@@ -19,10 +19,6 @@ from dewey.core.logging import (
     update_trace_context,
 )
 from dewey.sqlalchemy.async_executor import create_task_async, process_task_async
-from dewey.sqlalchemy.async_notifications import (
-    create_notification_async,
-    send_notification_async,
-)
 from dewey.sqlalchemy.executor import create_task, process_task
 
 # ---------------------------------------------------------------------------
@@ -178,7 +174,7 @@ class TestSyncExecutorTrace:
 
 
 # ---------------------------------------------------------------------------
-# Async executor + notification: trace restored
+# Async executor: trace restored
 # ---------------------------------------------------------------------------
 
 
@@ -260,28 +256,3 @@ class TestAsyncTrace:
         assert completed, "expected a 'Task completed' log record"
         for r in completed:
             assert getattr(r, "dewey_request_id", None) == "REQ-PHASE3"
-
-    @pytest.mark.asyncio
-    async def test_send_notification_restores_trace(self, async_session):
-        seen: dict[str, dict] = {}
-
-        class CapturingChannel:
-            name = "cap"
-
-            def send(self, recipient, subject, body, payload):
-                from dewey.core.notifications import ChannelResult
-
-                seen["ctx"] = get_trace_context()
-                return ChannelResult(success=True)
-
-        notif = await create_notification_async(
-            async_session,
-            event_type="evt",
-            channel="cap",
-            recipient="x@y.z",
-            metadata={"trace": {"request_id": "REQ-N"}},
-        )
-        await async_session.commit()
-        await send_notification_async(async_session, notif.id, CapturingChannel())
-        assert seen["ctx"] == {"request_id": "REQ-N"}
-        assert get_trace_context() == {}

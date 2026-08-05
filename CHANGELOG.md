@@ -11,18 +11,24 @@ First published release. `0.3.0` was skipped: the `dewey` name on PyPI already
 carries a `0.3.0` from an unrelated 2011 project, and PyPI never allows a version
 string to be reused.
 
-### Deprecated
-- The notification layer (`dewey.*.notifications`, `NotificationEntry`,
-  `NotificationAttempt`, `Channel`, `ChannelRegistry`) is now documented as
-  **experimental** and sits outside the stability expectations for the rest of the
-  package. It is a second ledger with its own state machine and sweep, it predates the
-  dispatcher, and it is not dispatcher-driven. The intended direction for a later release
-  is to replace it: a notification becomes a task type with a channel handler, and
-  per-attempt history moves to the task ledger for every task type instead of living only
-  in this layer. Build anything load-bearing on the task API. Migrations still ship for
-  its tables.
-
 ### Removed
+- **The notification layer** — `dewey.core.notifications`, `dewey.*.notifications`,
+  `NotificationEntry`, `NotificationAttempt`, `Channel`, `ChannelRegistry` and their two
+  tables. It was a second ledger with its own state machine, sweep, retry engine and query
+  API, it predated the dispatcher and was never dispatcher-driven, and it was already
+  slated for replacement.
+
+  Shipping it as "experimental" would have put two tables into the initial Django
+  migration for every consumer, including everyone who never sends a notification — and the
+  initial migration is the one schema artifact that cannot be cheaply revised later.
+  Removing it now keeps the first published schema to exactly what the release promises:
+  one table, `task_entries`.
+
+  The capability returns on the task engine's foundations rather than beside them: a
+  notification is a task type whose handler sends through a channel, with per-attempt
+  history promoted to the task ledger for *every* task type — because "why did this retry
+  six times?" is a question about all tasks, not just emails. The removed code is kept for
+  reference on the `archive/notification-ledger-0.4` branch.
 - Celery support: the `dewey.adapters.celery` module, the `[celery]` extra, and
   Celery from the package keywords. Huey is the only advertised transport for the
   first release. The pre-inversion (`enqueue`-era) Celery adapter is kept for

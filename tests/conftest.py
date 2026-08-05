@@ -11,10 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import Session
 
 from dewey.sqlalchemy.models import Base, TaskEntryModel
-from dewey.sqlalchemy.notification_models import (  # noqa: F401 — ensure models registered
-    NotificationAttemptModel,
-    NotificationEntryModel,
-)
 from tests._helpers.concurrency import PostgresConcurrencyHarness
 
 # Default: local Postgres via Docker (port 5432)
@@ -79,8 +75,6 @@ def cleanup(engine):
     """Delete all task entries after each test — handles committed data."""
     yield
     with Session(engine) as session:
-        session.execute(delete(NotificationAttemptModel))
-        session.execute(delete(NotificationEntryModel))
         session.execute(delete(TaskEntryModel))
         session.commit()
 
@@ -115,7 +109,5 @@ async def async_session(async_engine):
 
     # Cleanup in a separate session
     async with factory() as cleanup_session:
-        await cleanup_session.execute(NotificationAttemptModel.__table__.delete())
-        await cleanup_session.execute(NotificationEntryModel.__table__.delete())
         await cleanup_session.execute(TaskEntryModel.__table__.delete())
         await cleanup_session.commit()

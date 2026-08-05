@@ -2,25 +2,6 @@
 
 # Async API
 from dewey.sqlalchemy.async_executor import create_task_async, process_task_async
-from dewey.sqlalchemy.async_notifications import (
-    create_notification_async,
-    create_notifications_for_event_async,
-    get_dead_notifications_async,
-    get_failed_notifications_async,
-    get_notification_async,
-    get_notification_attempts_async,
-    get_notification_stats_async,
-    get_notifications_for_task_async,
-    get_pending_notifications_async,
-    kill_notification_async,
-    process_notification_async,
-    purge_sent_notifications_async,
-    retry_notification_async,
-    send_notification_async,
-    sweep_failed_notifications_async,
-    sweep_notifications_async,
-    sweep_stuck_notifications_async,
-)
 from dewey.sqlalchemy.async_queries import (
     bulk_retry_async,
     get_dead_async,
@@ -55,29 +36,6 @@ from dewey.sqlalchemy.listen import (
     notify_work_available_async,
 )
 from dewey.sqlalchemy.models import Base, TaskEntryModel
-from dewey.sqlalchemy.notification_models import (
-    NotificationAttemptModel,
-    NotificationEntryModel,
-)
-from dewey.sqlalchemy.notifications import (
-    create_notification,
-    create_notifications_for_event,
-    get_dead_notifications,
-    get_failed_notifications,
-    get_notification,
-    get_notification_attempts,
-    get_notification_stats,
-    get_notifications_for_task,
-    get_pending_notifications,
-    kill_notification,
-    process_notification,
-    purge_sent_notifications,
-    retry_notification,
-    send_notification,
-    sweep_failed_notifications,
-    sweep_notifications,
-    sweep_stuck_notifications,
-)
 from dewey.sqlalchemy.queries import (
     bulk_retry,
     get_dead,
@@ -102,8 +60,6 @@ __all__ = [
     # Models
     "Base",
     "TaskEntryModel",
-    "NotificationEntryModel",
-    "NotificationAttemptModel",
     "DEFAULT_WORK_CHANNEL",
     "AsyncPostgresWorkListener",
     "WorkNotification",
@@ -132,24 +88,6 @@ __all__ = [
     "bulk_retry",
     "kill_task",
     "purge_completed",
-    # Notifications
-    "create_notification",
-    "create_notifications_for_event",
-    "send_notification",
-    "process_notification",
-    "sweep_notifications",
-    "sweep_failed_notifications",
-    "sweep_stuck_notifications",
-    "get_notification",
-    "get_notification_attempts",
-    "get_notification_stats",
-    "get_notifications_for_task",
-    "get_pending_notifications",
-    "get_failed_notifications",
-    "get_dead_notifications",
-    "retry_notification",
-    "kill_notification",
-    "purge_sent_notifications",
     # --- Async API ---
     # Task executor
     "create_task_async",
@@ -173,22 +111,4 @@ __all__ = [
     "bulk_retry_async",
     "kill_task_async",
     "purge_completed_async",
-    # Notifications
-    "create_notification_async",
-    "create_notifications_for_event_async",
-    "send_notification_async",
-    "process_notification_async",
-    "sweep_notifications_async",
-    "sweep_failed_notifications_async",
-    "sweep_stuck_notifications_async",
-    "get_notification_async",
-    "get_notification_attempts_async",
-    "get_notification_stats_async",
-    "get_notifications_for_task_async",
-    "get_pending_notifications_async",
-    "get_failed_notifications_async",
-    "get_dead_notifications_async",
-    "retry_notification_async",
-    "kill_notification_async",
-    "purge_sent_notifications_async",
 ]

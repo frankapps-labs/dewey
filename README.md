@@ -172,15 +172,16 @@ path. `DEAD → PENDING` is a manual retry.
 | [From Huey or Celery](docs/onboarding/from-huey-celery.md) | Pattern-by-pattern migration, one task type at a time |
 | [Query API](docs/query-api.md) | Backlog, stuck work, dead letters, manual retry, purging |
 | [Logging](docs/logging.md) | Correlation metadata across producer, dispatcher and worker |
-| [Notifications](docs/notifications.md) | Experimental multi-channel delivery ledger |
 
 ## Stability
 
 On `0.x` the public API may change between minor versions. `1.0` waits until the API has
 been proven by real production use.
 
-The notification layer (`dewey.*.notifications`) is **experimental** and sits outside
-even that promise — see [docs/notifications.md](docs/notifications.md).
+The release is deliberately one thing: durable task delivery. Multi-channel notification
+delivery is **not** part of it — an earlier ledger for that was removed before publishing
+rather than shipped half-committed, and the shape it should return in is a task type with
+a channel handler.
 
 ## Development
 

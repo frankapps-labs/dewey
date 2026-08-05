@@ -47,7 +47,9 @@ Table `task_entries` (Django migration `dewey/0001_initial`, and
 | `ix_task_type_created` | `(task_type, created_at)` |
 | `uq_task_type_idempotency_key` | `UNIQUE (task_type, idempotency_key)` |
 
-Notification tables are unchanged and included in the migration.
+The migration creates **one table**: `task_entries`. The notification layer and its two
+tables were removed before publishing (see breaking changes), so the first published schema
+is exactly what the release promises.
 
 **Migration verified:** fresh `migrate` on an empty database, `makemigrations --check`
 reports no drift, `migrate dewey zero` then re-apply succeeds, partial-index DDL
@@ -66,7 +68,8 @@ inspected directly.
 
 `dewey.dispatcher`: `Dispatcher`, `AsyncDispatcher`, `DispatchBackend`,
 `AsyncDispatchBackend`, `DispatchFn`, and defaults.
-`dewey.sqlalchemy` / `dewey.django`: producer, worker, sweep and query APIs, plus
+`dewey.sqlalchemy` (47 names) / `dewey.django` (19 names): producer, worker, sweep and
+query APIs, plus
 `SQLAlchemyDispatchBackend`, `AsyncSQLAlchemyDispatchBackend` and
 `DjangoDispatchBackend`.
 `dewey.adapters`: `DispatcherAdapter`, `HueyAdapter`.
@@ -87,7 +90,10 @@ Nothing published depends on these; the previous line was in-repo only.
    `archive/celery-adapter-enqueue-era`.
 5. **`create_task` defaults** `queue`, `priority` and `max_attempts` from policy.
 6. **A dispatcher is now required** for work to move at all, including retries.
-7. **Notifications are experimental** and outside the stability statement.
+7. **The notification layer is removed** — `dewey.core.notifications`,
+   `dewey.*.notifications`, `Channel`, `ChannelRegistry`, `NotificationEntry`,
+   `NotificationAttempt` and their two tables. Archived on
+   `archive/notification-ledger-0.4`. Returns later as task types with channel handlers.
 
 ---
 
@@ -115,15 +121,15 @@ All at the head of this branch.
 | `make lint` | All checks passed |
 | `make format-check` | 82 files already formatted |
 | `make typecheck` (basedpyright) | 0 errors, 0 warnings, 0 notes |
-| `make test` (local Postgres 16) | **551 passed**, 92% coverage |
-| `make test-integration` (compose Postgres + Redis) | **551 passed** |
+| `make test` (local Postgres 16) | **437 passed**, 93% coverage |
+| `make test-integration` (compose Postgres + Redis) | **437 passed** |
 | Multi-dispatcher concurrency (4 threads, 60 tasks, real Postgres) | pass — every task claimed exactly once |
 | Resilience lab, ADR-003 suite (11 scenarios, chaos) | **verdict PASS** |
 | Huey 2.5.5 adapter suite | 17 passed |
 | `uv build` | `dewey-0.4.0.tar.gz`, `dewey-0.4.0-py3-none-any.whl` |
 | `twine check dist/*` | PASSED (both) |
 | Installed-wheel smoke (clean venv, real Postgres + Redis) | all checks passed |
-| Wheel contents | 40 modules + `py.typed` + migrations; no tests, no private paths |
+| Wheel contents | 39 modules + `py.typed` + migrations; no tests, no private paths |
 | Dependency audit (OSV over the locked set) | 0 advisories across Django, Huey, SQLAlchemy, asyncpg, psycopg2 |
 | CI dependency audit | `pip-audit` over the exported lockfile, advisory-only job |
 | Public/private boundary | no HQ paths, ADR text, or internal product names in the tree or artifacts |
@@ -179,7 +185,8 @@ Worth recording because each would have shipped silently:
 - **The async path now has chaos coverage** via the resilience lab, whose testbed is an
   async SQLAlchemy + FastAPI consumer. The Huey-over-Redis transport, by contrast, is
   covered by unit and installed-wheel smoke tests but not by the lab's chaos scenarios.
-- **Notifications** carry no dispatcher integration and remain experimental.
+- **No multi-channel notification delivery.** Removed before publishing rather than
+  shipped half-committed; see breaking changes.
 
 ---
 
@@ -187,6 +194,7 @@ Worth recording because each would have shipped silently:
 
 | Deferred | Why |
 |---|---|
+| Notification delivery (email/webhook/Slack channels) | Removed rather than deprecated. Returns as task types with channel handlers, with attempt history on the task ledger |
 | ADR-004 safety checks (`dewey check`, safety metadata, `docs/task-safety.md`) | Would add a second, larger policy vocabulary before the first has been used in production |
 | DB runtime policy overrides | No admin surface to drive them; resolver is already layered for it |
 | Lifecycle hooks (`on_complete` / `on_fail` / `on_retry`) | No consumer needs them, and the latency payload wants designing with them |
@@ -198,6 +206,11 @@ Worth recording because each would have shipped silently:
 ---
 
 ## Resilience lab
+
+> **Note:** this verdict predates the notification-layer removal. The lab's testbed and
+> tooling still reference that layer, so the lab cannot run against the current head until
+> a lab-side cleanup lands — recorded in the lab's own `reports/latest.md`. Reproducing the
+> verdict below means checking Dewey out at `archive/notification-ledger-0.4`.
 
 The private lab's testbed was migrated to the 0.4 API (`@dewey.task` declarations,
 `kwargs=`, and `AsyncDispatcher` replacing its hand-rolled claim and sweep loops) and the
@@ -218,6 +231,10 @@ ADR-003 release suite was run against this head.
 | cohabitation-chaos | 31.34s | 1771.60ms |
 | resilience-long | 30.30s | 13.68ms |
 | notification-pressure | 42.43s | 12.66ms |
+
+The `notification-pressure` scenario exercised the notification ledger, which this release
+no longer contains. It passed at the time and is recorded for completeness; it retires with
+the layer.
 
 Plus `worker-kill-check`: passed, 1 completed, 0 dead — a task in flight when its worker
 is killed recovers and completes.
@@ -242,13 +259,12 @@ recalibrating in the lab; it is not a release blocker.
    CONTRIBUTING clone URL and the SECURITY advisory link all point there, matching the
    git remote.
 2. ~~**Confirm PyPI ownership** of the `dewey` project.~~ **Confirmed by the maintainer.**
-3. ~~**Decide on the notification layer.**~~ **Decided:** experimental in 0.4.0, folded
-   into the task engine in 0.5 — notifications become task types with channel handlers,
-   and per-attempt history is promoted to the task ledger for *all* task types, since
-   "why did this retry six times?" is a question about every task. Reasoning and the
-   competitive landscape are recorded in the private
-   `docs/decisions/dewey/dewey-positioning-and-notifications.md`. The experimental marking
-   already in this release is what keeps that path open without a broken promise.
+3. ~~**Decide on the notification layer.**~~ **Decided and executed: removed from 0.4.0**,
+   not deprecated. Shipping it experimental would have written two tables into the initial
+   Django migration for every consumer, and that migration is the one artifact that cannot
+   be cheaply revised later. It returns on the task engine's foundations — a task type with
+   a channel handler, plus per-attempt history promoted to the task ledger for all task
+   types. Archived on `archive/notification-ledger-0.4`.
 4. Merge `release/0.4.0` → `main` (`make release` requires `main`).
 5. Tag `v0.4.0` and push; `.github/workflows/publish.yml` publishes on tag via trusted
    publishing.

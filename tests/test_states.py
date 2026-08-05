@@ -78,11 +78,14 @@ class TestTransitions:
         assert TaskStatus.PENDING.can_transition_to(TaskStatus.FAILED) is False
         assert TaskStatus.FAILED.can_transition_to(TaskStatus.COMPLETED) is False
 
-    def test_cross_type_rejected(self):
-        """TaskStatus.can_transition_to rejects NotificationStatus values."""
-        from dewey.core.notifications import NotificationStatus
+    def test_a_foreign_status_value_is_rejected(self):
+        """can_transition_to answers False for anything outside the task states."""
+        from enum import Enum
 
-        assert TaskStatus.PENDING.can_transition_to(NotificationStatus.SENDING) is False  # type: ignore[arg-type]
+        class OtherStatus(Enum):
+            SENDING = "sending"
+
+        assert TaskStatus.PENDING.can_transition_to(OtherStatus.SENDING) is False  # type: ignore[arg-type]
 
 
 class TestRetryLogic:
