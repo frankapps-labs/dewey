@@ -56,7 +56,7 @@ The claim is what makes concurrent dispatchers safe:
 ```sql
 SELECT id FROM task_entries
 WHERE status = 'pending' AND (scheduled_for IS NULL OR scheduled_for <= now())
-ORDER BY priority DESC, scheduled_for ASC NULLS FIRST, created_at ASC
+ORDER BY priority DESC, COALESCE(scheduled_for, created_at) ASC, created_at ASC
 LIMIT 100
 FOR UPDATE SKIP LOCKED;
 -- then: UPDATE those IDs to 'dispatching', and commit

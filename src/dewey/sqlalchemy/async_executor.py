@@ -86,10 +86,12 @@ async def process_task_async(
     """
     Process a single task using two-phase commit. Async version of process_task().
 
-    `backoff` is an optional ``(attempts: int) -> timedelta`` function that
-    decides how long to wait before retrying a failed task. Defaults to
-    :func:`dewey.core.backoff.default_task_backoff` (2 min base, 1 hr cap).
-    Useful for fast-retry queues, custom strategies, or deterministic tests.
+    ``handler`` is optional: when omitted, the handler registered for the task type
+    with ``@dewey.task`` is used. Passing one explicitly overrides the registry.
+
+    Retry, dead-letter and backoff behaviour come from the resolved policy.
+    ``backoff`` overrides the policy's backoff for this call, primarily for
+    deterministic tests.
 
     Phase 1: PENDING → PROCESSING (committed — visible to sweep)
     Phase 2: Run async handler

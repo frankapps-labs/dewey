@@ -292,8 +292,8 @@ lab's `reports/latest.md` at `27820d6`.
 
 - [x] Resilience lab run green against the post-removal release head (10/10 scenarios + worker-kill, verdict PASS)
 - [x] PyPI project ownership confirmed (maintainer owns the `dewey` project)
-- [x] `archive/celery-adapter-enqueue-era` pushed, so the changelog's reference to it is
-      true for anyone reading it
+- [x] `archive/celery-adapter-enqueue-era` and `archive/notification-ledger-0.4`
+      pushed, so the changelog's references are true for anyone reading it
 - [ ] `release/0.4.0` merged to `main`, CI green there
 - [ ] `CHANGELOG.md` heading dated
 - [ ] `git tag v0.4.0 && git push --tags`

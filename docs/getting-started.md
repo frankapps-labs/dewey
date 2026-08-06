@@ -351,13 +351,18 @@ DATABASES = {
 DEWEY = {"DISPATCH": "myapp.tasks.adapter.dispatch", "DATABASE": "dewey"}
 ```
 
+`DEWEY["DATABASE"]` must name the alias used by the dispatcher; the dispatcher does not
+consult routers when its backend is constructed.
+
 You will want a database router so Dewey's models resolve to that alias. Dewey resolves
 the alias through your routers for every transaction, `SELECT FOR UPDATE`, write and
 NOTIFY, so all of them stay on the one connection that holds the lock. If you prefer not
 to add a router, `create_task`, `process_task`, `sweep`, `retry_task` and `kill_task`
-also accept the alias explicitly: `create_task(task_type=..., using="dewey")`. Pointing at
-the same physical database through a second alias is a legitimate configuration — the
-point is the separate connection budget, not a separate server.
+also accept the alias explicitly: `create_task(task_type=..., using="dewey")`. The wider
+query/action API (`get_*`, `bulk_retry`, `purge_completed`) follows routers and has no
+`using` argument, so router-less alias use is limited to the functions listed above.
+Pointing at the same physical database through a second alias is a legitimate
+configuration — the point is the separate connection budget, not a separate server.
 
 **What the lab measures.** Its `cohabitation` and `cohabitation-chaos` scenarios run
 sustained tenant traffic (`SELECT pg_sleep`) against the same Postgres as a live
