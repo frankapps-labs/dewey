@@ -2,7 +2,7 @@
 
 **Status:** awaiting human approval. Nothing is tagged and nothing is published.
 **Branch:** `release/0.4.0`
-**Date:** 2026-08-05
+**Date:** 2026-08-06
 
 ---
 
@@ -36,7 +36,7 @@ Table `task_entries` (Django migration `dewey/0001_initial`, and
 - status domain gains `dispatching`
 - `process_after` → `scheduled_for` (predates this release)
 
-**Indexes** (verified in real Postgres DDL)
+**Indexes** (verified in real Postgres DDL; names below are the Django migration's)
 
 | Name | Definition |
 |---|---|
@@ -46,6 +46,13 @@ Table `task_entries` (Django migration `dewey/0001_initial`, and
 | `ix_task_failed_sched` | `(scheduled_for) WHERE status = 'failed'` |
 | `ix_task_type_created` | `(task_type, created_at)` |
 | `uq_task_type_idempotency_key` | `UNIQUE (task_type, idempotency_key)` |
+
+The SQLAlchemy path (`Base.metadata.create_all`) creates the same five indexes and the
+same `uq_task_type_idempotency_key` constraint, but under its own index names:
+`ix_task_entries_pending_scheduled_for`, `ix_task_entries_dispatching_at`,
+`ix_task_entries_processing_started`, `ix_task_entries_failed_scheduled_for`,
+`ix_task_entries_type_created`. Definitions are identical; only the names differ
+between the two paths.
 
 The migration creates **one table**: `task_entries`. The notification layer and its two
 tables were removed before publishing (see breaking changes), so the first published schema
@@ -68,11 +75,12 @@ inspected directly.
 
 `dewey.dispatcher`: `Dispatcher`, `AsyncDispatcher`, `DispatchBackend`,
 `AsyncDispatchBackend`, `DispatchFn`, and defaults.
-`dewey.sqlalchemy` (47 names) / `dewey.django` (19 names): producer, worker, sweep and
-query APIs, plus
-`SQLAlchemyDispatchBackend`, `AsyncSQLAlchemyDispatchBackend` and
-`DjangoDispatchBackend`.
-`dewey.adapters`: `DispatcherAdapter`, `HueyAdapter`.
+`dewey.sqlalchemy` (47 names): producer, worker, sweep and query APIs, plus
+`SQLAlchemyDispatchBackend` and `AsyncSQLAlchemyDispatchBackend`.
+`dewey.django` (19 lazy names): producer, worker, sweep and query APIs;
+`DjangoDispatchBackend` is imported from `dewey.django.dispatch`.
+`dewey.adapters`: `DispatcherAdapter`, `ProcessTaskFn`. `HueyAdapter` is imported from
+`dewey.adapters.huey` directly, so `import dewey.adapters` never requires Huey.
 
 ---
 
@@ -119,10 +127,10 @@ All at the head of this branch.
 | Gate | Result |
 |---|---|
 | `make lint` | All checks passed |
-| `make format-check` | 71 files already formatted |
+| `make format-check` | 72 files already formatted |
 | `make typecheck` (basedpyright) | 0 errors, 0 warnings, 0 notes |
-| `make test` (local Postgres 16) | **445 passed**, 93% coverage |
-| `make test-integration` (compose Postgres + Redis) | **445 passed** |
+| `make test` (local Postgres 16) | **461 passed**, 93% coverage |
+| `make test-integration` (compose Postgres + Redis) | **461 passed** |
 | Multi-dispatcher concurrency (4 threads, 60 tasks, real Postgres) | pass — every task claimed exactly once |
 | Resilience lab, ADR-003 suite (10 scenarios, chaos) | **verdict PASS**, plus `worker-kill-check` |
 | Huey 2.5.5 adapter suite | 17 passed |
@@ -173,7 +181,19 @@ Worth recording because each would have shipped silently:
    loop and ended the process, so claimed work then waited for the dispatch timeout and
    nothing swept at all. Found by the resilience lab's `db-outage` scenario, which failed
    on first run against 0.4 (nothing drained, rows stuck in `PROCESSING` for 74s) and
-   passes now (drained in 18.4s, zero dead).
+   passes in the final run with zero dead (62.79s drain, governed by the lab's one-minute
+   stuck-processing threshold — see the resilience lab section).
+7. **Django's dedicated-database path split transactions across aliases.** Router-directed
+   `SELECT FOR UPDATE` calls could run outside the `default` transaction, and sweeps and
+   NOTIFY could target the wrong database. Django producer, worker, action and sweep paths
+   now resolve one alias and use it consistently; dedicated-alias tests cover explicit and
+   router-selected operation.
+8. **Due retries could starve behind fresh immediate work.** NULL-first ordering put every
+   unscheduled row ahead of every due timestamp. All dispatch backends now order by
+   `COALESCE(scheduled_for, created_at)`, with sync, async and Django regressions.
+9. **A stranded release paused recovery sweeps.** New claims were correctly blocked, but
+   the same gate also stopped failed-task and timeout recovery. Sweeps now continue while
+   claiming remains paused, with sync and async regression coverage.
 
 ---
 
@@ -214,40 +234,42 @@ Worth recording because each would have shipped silently:
 
 ## Resilience lab
 
-The private lab was de-notified and rerun against Dewey `f0e7eb5` after the notification
-layer's removal. Its testbed uses `@dewey.task`, `kwargs=`, and `AsyncDispatcher` rather
+The private lab was de-notified after the notification layer's removal; the final run
+targets Dewey `83c28e2`, which carries the final duo's review fixes, including the
+stranded-release and backoff-isolation fixes described above. Its testbed uses
+`@dewey.task`, `kwargs=`, and `AsyncDispatcher` rather
 than a hand-rolled claim/sweep loop.
 
 **Verdict: PASS — 10/10 scenarios, plus `worker-kill-check`.**
 
 | Scenario | Drain | p95 accept |
 |---|---|---|
-| release-check | 41.71s | 111.37ms |
-| db-sleep | 6.06s | 11.32ms |
-| db-latency (Toxiproxy) | 10.10s | 9.00ms |
-| db-outage (Postgres disabled mid-flight) | 64.74s | 15.80ms |
-| priority-lane | 3.05s | 27.57ms |
-| priority-lane-batch-pressure | 16.25s | 106.21ms |
-| wake-on-insert-trickle | 60.59s | 13.83ms |
-| cohabitation | 20.15s | 16.51ms |
-| cohabitation-chaos | 30.36s | 1019.10ms |
-| resilience-long | 75.80s | 19.14ms |
+| release-check | 41.69s | 103.90ms |
+| db-sleep | 6.13s | 28.71ms |
+| db-latency (Toxiproxy) | 10.07s | 10.95ms |
+| db-outage (Postgres disabled mid-flight) | 62.79s | 14.32ms |
+| priority-lane | 3.04s | 25.38ms |
+| priority-lane-batch-pressure | 16.30s | 120.09ms |
+| wake-on-insert-trickle | 60.49s | 15.23ms |
+| cohabitation | 20.14s | 13.35ms |
+| cohabitation-chaos | 30.30s | 1018.41ms |
+| resilience-long | 81.74s | 12.66ms |
 
 `notification-pressure` retired with the layer it exercised. `worker-kill-check` passed
 with one completed task and zero dead. Release-check improved over its May baseline
-(125.64ms p95, 45.94s drain) to 111.37ms and 41.71s.
+(125.64ms p95, 45.94s drain) to 103.90ms and 41.69s.
 
-The rerun found the stranded-release and coupled-backoff defects described above. Three
-consecutive `db-outage` runs passed after the fixes with no rows left in `DISPATCHING`.
-Its ~63s recovery is governed by the lab's one-minute stuck-processing threshold: a
-handler whose database connection dies cannot write its outcome and is indistinguishable
-from a killed worker until the sweep. That is expected at-least-once recovery behavior,
-not a release defect.
+Earlier lab reruns surfaced the stranded-release and coupled-backoff defects described
+above; the fixes are in the target SHA. Three consecutive `db-outage` runs passed after
+the fixes with no rows left in `DISPATCHING`. Its ~63s recovery is governed by the lab's
+one-minute stuck-processing threshold: a handler whose database connection dies cannot
+write its outcome and is indistinguishable from a killed worker until the sweep. That is
+expected at-least-once recovery behavior, not a release defect.
 
 The run used scenario copies on a shifted port with `--skip-compare`, so baselines were
 not promoted. The standalone `burst` scenario still has a known cold-pool threshold
 miscalibration. Neither changes the release-suite verdict; details are retained in the
-lab's `reports/latest.md` at `f1e7671`.
+lab's `reports/latest.md` at `27820d6`.
 
 ## Before publishing
 
