@@ -19,7 +19,7 @@ from dewey.core.logging import (
 from dewey.core.states import TaskStatus
 from dewey.core.types import TaskEntry as TaskEntryDC
 from dewey.django.listen import notify_work_available
-from dewey.django.models import TaskEntry
+from dewey.django.models import TaskEntry, resolve_db_alias
 from dewey.policy import resolve_policy
 from dewey.serialization import encode_args, encode_kwargs
 
@@ -44,6 +44,7 @@ def create_task(
     scheduled_for: datetime | None = None,
     idempotency_key: str | None = None,
     metadata: dict[str, Any] | None = None,
+    using: str | None = None,
 ) -> TaskEntryDC:
     """
     Write a task to the ledger. This is step 1 — Postgres is the source of truth.
@@ -51,11 +52,16 @@ def create_task(
     The dispatcher picks the row up from Postgres — producers never talk to a
     broker.
 
+    ``using`` pins the write to a database alias; when omitted, the project's
+    routers decide, as with any ORM write. The NOTIFY goes on the same alias, so
+    the row and its wake-up stay in one transaction.
+
     Returns a TaskEntry dataclass (with .id).
     """
     policy = resolve_policy(task_type)
     queue = policy.queue if queue is None else queue
-    task = TaskEntry.objects.create(
+    alias = resolve_db_alias(using)
+    task = TaskEntry.objects.using(alias).create(
         task_type=task_type,
         args=encode_args(args),
         kwargs=encode_kwargs(kwargs),
@@ -68,8 +74,9 @@ def create_task(
     )
 
     # Postgres holds the NOTIFY until this transaction commits, so a rollback
-    # cannot wake a dispatcher for a row that does not exist.
-    notify_work_available(kind="task", entry_id=str(task.id), queue=queue)
+    # cannot wake a dispatcher for a row that does not exist. That guarantee
+    # only holds on the connection that wrote the row — hence the same alias.
+    notify_work_available(kind="task", entry_id=str(task.id), queue=queue, using=alias)
 
     logger.info("Task created id=%s type=%s queue=%s", task.id, task_type, queue)
     return task.to_dataclass()
@@ -80,6 +87,7 @@ def process_task(
     handler: TaskHandler | None = None,
     *,
     backoff: BackoffFn | None = None,
+    using: str | None = None,
 ) -> bool:
     """
     Process a single task using two-phase commit.
@@ -103,14 +111,19 @@ def process_task(
 
     Uses SELECT FOR UPDATE to prevent concurrent processing.
 
+    ``using`` pins every phase to a database alias; when omitted, the project's
+    routers decide. All three transactions run on that one alias — the lock is
+    only worth anything on the connection that holds it.
+
     Returns True if the task was processed successfully.
     """
     now = datetime.now(UTC)
+    alias = resolve_db_alias(using)
 
     # Phase 1: Claim the task
-    with transaction.atomic():
+    with transaction.atomic(using=alias):
         try:
-            task = TaskEntry.objects.select_for_update().get(id=task_id)
+            task = TaskEntry.objects.using(alias).select_for_update().get(id=task_id)
         except TaskEntry.DoesNotExist:
             logger.warning("Task not found id=%s", task_id)
             return False
@@ -170,9 +183,9 @@ def process_task(
             # Phase 3a: Mark failed or dead-lettered
             error_msg = str(exc)
 
-            with transaction.atomic():
+            with transaction.atomic(using=alias):
                 try:
-                    task = TaskEntry.objects.select_for_update().get(id=task_id)
+                    task = TaskEntry.objects.using(alias).select_for_update().get(id=task_id)
                 except TaskEntry.DoesNotExist:
                     logger.warning("Task disappeared during processing id=%s", task_id)
                     return False
@@ -224,9 +237,9 @@ def process_task(
             return False
 
         # Phase 3b: Mark completed
-        with transaction.atomic():
+        with transaction.atomic(using=alias):
             try:
-                task = TaskEntry.objects.select_for_update().get(id=task_id)
+                task = TaskEntry.objects.using(alias).select_for_update().get(id=task_id)
             except TaskEntry.DoesNotExist:
                 logger.warning("Task disappeared during processing id=%s", task_id)
                 return False
@@ -242,7 +255,7 @@ def process_task(
                 return False
 
             task.status = TaskStatus.COMPLETED.value
-            task.completed_at = now
+            task.completed_at = datetime.now(UTC)
             task.error = ""
             task.save(update_fields=["status", "completed_at", "error", "updated_at"])
 

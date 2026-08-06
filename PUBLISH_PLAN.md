@@ -149,12 +149,12 @@ integration target.
 - [x] Dispatcher and TaskPolicy changes recorded there. Safety checks are deferred
       (Phase 5).
 - [ ] Date-stamp changelog at tag time.
-- [ ] Define 1.0 release gate in README/changelog notes: at least one real
+- [x] Define 1.0 release gate in README/changelog notes: at least one real
       consumer must validate the public API before `1.0`.
 
 ## Phase 9 — Free OSS tooling/security
 
-- [ ] Coveralls coverage upload.
+- [x] Coveralls coverage upload.
 - [ ] GitHub CodeQL for Python.
 - [x] Dependency audit. An OSV query over the locked set runs clean (Django, Huey,
       SQLAlchemy, asyncpg, psycopg2); CI now runs `pip-audit` over the exported
@@ -206,8 +206,8 @@ sustained insert pressure.
 - [x] Decide the shape: `dewey.sqlalchemy.listen` exposes transactional
       `notify_work_available(_async)` producers plus
       `AsyncPostgresWorkListener`, a dedicated asyncpg-backed listener that
-      workers can idle on. It round-trips through the same `task_entries` /
-      `notification_entries` tables so brokers stay optional.
+      workers can idle on. It round-trips through the same `task_entries`
+      table so brokers stay optional.
 - [x] Ship the helper behind the existing `dewey[async]` / `dewey[sqlalchemy]`
       extras; `dewey[async]` now includes asyncpg so LISTEN works without a
       new Dewey extra.
@@ -227,8 +227,8 @@ sustained insert pressure.
       SQL until then.
 - [ ] Add partial index on `task_entries(completed_at) WHERE completed_at IS
       NOT NULL` to keep windowed percentile queries cheap.
-- [x] Fix SQLAlchemy executors to stamp `completed_at` at actual completion
-      time, not claim time; latency gates depend on this.
+- [x] Fix every executor to stamp `completed_at` at actual completion time,
+      not claim time; latency gates depend on this.
 
 ## Correlation-context extraction (future)
 
@@ -243,7 +243,8 @@ sustained insert pressure.
 - [x] Wired into a real async SQLAlchemy consumer (FastAPI + asyncpg) and exercised
       under chaos before release: Toxiproxy-injected Postgres latency, a mid-flight
       Postgres outage, worker kills, cohabitation pressure, and drain/p95 gates
-      under load. 11/11 scenarios pass.
+      under load. 10/10 scenarios plus `worker-kill-check` pass
+      (`notification-pressure` retired with the removed notification layer).
 - [x] Broker stays transport, Postgres stays the guarantee — proven by the
       broker-outage leg of the installed-wheel smoke and the DB-outage scenario.
 - [x] Integration rough edges fed back before release. Two of them were real

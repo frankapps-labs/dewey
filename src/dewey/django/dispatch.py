@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from django.db import connection, connections, models, transaction
+from django.db.models.functions import Coalesce
 
 from dewey.core.states import TaskStatus
 from dewey.django.models import TaskEntry
@@ -57,9 +58,12 @@ class DjangoDispatchBackend:
     def claim(self, limit: int) -> list[str]:
         """Move up to ``limit`` ready rows to DISPATCHING, committed before return.
 
-        Ordering is highest ``priority`` first, then by due time, then oldest
-        first. ``select_for_update(skip_locked=True)`` is what lets several
-        dispatchers run without double-claiming.
+        Ordering is highest ``priority`` first, then by effective due time —
+        ``scheduled_for`` if set, else ``created_at`` — then oldest first.
+        Immediate and due scheduled work share one line, so a steady stream of
+        fresh tasks cannot starve a retry that has been due for minutes.
+        ``select_for_update(skip_locked=True)`` is what lets several dispatchers
+        run without double-claiming.
         """
         now = datetime.now(UTC)
         with transaction.atomic(using=self.using):
@@ -70,9 +74,7 @@ class DjangoDispatchBackend:
                     models.Q(scheduled_for__isnull=True) | models.Q(scheduled_for__lte=now),
                     status=TaskStatus.PENDING.value,
                 )
-                .order_by(
-                    "-priority", models.F("scheduled_for").asc(nulls_first=True), "created_at"
-                )
+                .order_by("-priority", Coalesce("scheduled_for", "created_at").asc(), "created_at")
             )
             if self.queues is not None:
                 queryset = queryset.filter(queue__in=self.queues)
@@ -101,6 +103,7 @@ class DjangoDispatchBackend:
             stuck_threshold_minutes=self.stuck_threshold_minutes,
             dispatch_timeout_seconds=self.dispatch_timeout_seconds,
             limit=self.sweep_limit,
+            using=self.using,
         )
 
     # --- wake-up ---

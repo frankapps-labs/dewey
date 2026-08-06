@@ -93,6 +93,31 @@ class TestClaim:
 
         assert backend.claim(2) == [first.id, second.id]
 
+    def test_due_scheduled_work_competes_with_immediate_work_on_due_time(self, backend, session):
+        """A due scheduled row must not queue behind every immediate row.
+
+        Sorting NULL ``scheduled_for`` first meant a sustained stream of immediate
+        work outranked scheduled and retried rows that were already due, starving
+        them indefinitely. Ordering by coalesce(scheduled_for, created_at) makes
+        them compete on how long each has actually been waiting.
+        """
+        older_immediate = create_task(session, task_type="t")
+        overdue = create_task(
+            session, task_type="t", scheduled_for=datetime.now(UTC) - timedelta(minutes=5)
+        )
+        newer_immediate = create_task(session, task_type="t")
+        session.commit()
+        session.execute(
+            update(TaskEntryModel)
+            .where(TaskEntryModel.id == older_immediate.id)
+            .values(created_at=datetime.now(UTC) - timedelta(minutes=10))
+        )
+        session.commit()
+
+        # Waiting longest goes first: the overdue row beats immediate work created
+        # after its due time, without jumping immediate work that was there before.
+        assert backend.claim(3) == [older_immediate.id, overdue.id, newer_immediate.id]
+
     def test_batch_size_is_respected(self, backend, session):
         for _ in range(5):
             create_task(session, task_type="t")
@@ -579,6 +604,61 @@ class TestSurvivesDatabaseOutage:
 
         dispatcher._retry_pending_release()
         assert dispatcher._pending_release == held  # not dropped on the floor
+
+    def test_the_sweep_still_runs_while_a_release_stays_stranded(self, backend, session):
+        """Recovery must not stop just because claiming is paused.
+
+        A persistently unwritable release pauses new claims so the stranded list
+        stays bounded — but the sweep is what makes retries eligible and reclaims
+        timed-out DISPATCHING rows, so it has to keep ticking through the pause.
+        """
+        task = create_task(session, task_type="t")
+        session.commit()
+
+        def broken_release(task_ids) -> None:
+            raise ConnectionError("release unavailable")
+
+        def broken_transport(task_id: str) -> None:
+            raise ConnectionError("redis is down")
+
+        backend.release = broken_release  # type: ignore[method-assign]
+        dispatcher = Dispatcher(
+            backend,
+            broken_transport,
+            batch_size=1,
+            idle_poll_seconds=0.001,
+            sweep_interval_seconds=0.0,
+            dispatch_retry_base_seconds=0.001,
+            database_retry_cap_seconds=0.005,
+        )
+        dispatcher.dispatch_batch()
+        assert dispatcher._pending_release == [task.id]
+
+        real_sweep = backend.run_sweep
+        sweeps: list[dict[str, list[str]]] = []
+
+        def counted_sweep() -> dict[str, list[str]]:
+            result = real_sweep()
+            sweeps.append(result)
+            return result
+
+        real_claim = backend.claim
+        claim_calls: list[int] = []
+
+        def counted_claim(limit: int) -> list[str]:
+            claim_calls.append(limit)
+            return real_claim(limit)
+
+        backend.run_sweep = counted_sweep  # type: ignore[method-assign]
+        backend.claim = counted_claim  # type: ignore[method-assign]
+        dispatcher.run(max_iterations=3)
+
+        assert len(sweeps) == 3  # recovery kept running
+        assert claim_calls == []  # claiming stayed paused
+        assert dispatcher._pending_release == [task.id]  # still held for the next retry
+        assert _status(session, task.id) == TaskStatus.DISPATCHING.value
+        assert dispatcher._health.retry_delay > 0  # transport backoff kept its own deadline
+        assert dispatcher._db_health.retry_delay > 0  # database backoff kept climbing
 
     def test_a_failing_sweep_is_already_tolerated(self, backend, collected):
         def boom() -> dict[str, list[str]]:

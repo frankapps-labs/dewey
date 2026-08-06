@@ -272,29 +272,33 @@ class Dispatcher:
                 iterations += 1
 
                 release_ready = self._retry_pending_release()
-                if not release_ready:
-                    # Do not claim more work while rows we already own remain stranded.
-                    # Otherwise a selective release failure can grow this list without
-                    # bound even when claim queries still succeed.
-                    dispatched = 0
-                else:
-                    try:
-                        self.maybe_sweep()
-                        dispatched = self.dispatch_batch()
-                    except Exception:
-                        # Almost always the database going away underneath us. A
-                        # dispatcher that exits here is worse than useless: claimed work
-                        # waits for the dispatch timeout and nothing sweeps at all, so a
-                        # blip becomes an outage. Back off and try again.
-                        logger.warning(
-                            "Dispatcher iteration failed; backing off and retrying",
-                            exc_info=True,
-                        )
-                        self._db_health.note_failure()
+                try:
+                    # The sweep runs even while a stranded release pauses claiming:
+                    # it is recovery, and a broken release path must not also stop
+                    # retries becoming eligible or timed-out claims being reclaimed.
+                    self.maybe_sweep()
+                    if not release_ready:
+                        # Do not claim more work while rows we already own remain
+                        # stranded. Otherwise a selective release failure can grow
+                        # this list without bound even when claim queries still
+                        # succeed.
                         dispatched = 0
                     else:
-                        if not self._pending_release:
-                            self._db_health.note_success()
+                        dispatched = self.dispatch_batch()
+                except Exception:
+                    # Almost always the database going away underneath us. A
+                    # dispatcher that exits here is worse than useless: claimed work
+                    # waits for the dispatch timeout and nothing sweeps at all, so a
+                    # blip becomes an outage. Back off and try again.
+                    logger.warning(
+                        "Dispatcher iteration failed; backing off and retrying",
+                        exc_info=True,
+                    )
+                    self._db_health.note_failure()
+                    dispatched = 0
+                else:
+                    if not self._pending_release:
+                        self._db_health.note_success()
 
                 delay = max(
                     self._health.remaining_delay,
@@ -336,7 +340,8 @@ class Dispatcher:
         """Re-attempt stranded releases before claiming more work.
 
         Returns ``False`` while the database still refuses the release, which tells
-        the loop to skip sweep and claim for this iteration.
+        the loop to skip claiming for this iteration. The sweep is unaffected:
+        recovery keeps running while claiming is paused.
         """
         if not self._pending_release:
             return True
@@ -515,28 +520,30 @@ class AsyncDispatcher:
                 iterations += 1
 
                 release_ready = await self._retry_pending_release()
-                if not release_ready:
-                    # Match the sync loop: never accumulate fresh claims while rows
-                    # already owned by this dispatcher remain stranded.
-                    dispatched = 0
-                else:
-                    try:
-                        await self.maybe_sweep()
-                        dispatched = await self.dispatch_batch()
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception:
-                        # See the sync dispatcher: surviving a database blip is the whole
-                        # point of a long-running loop.
-                        logger.warning(
-                            "Dispatcher iteration failed; backing off and retrying",
-                            exc_info=True,
-                        )
-                        self._db_health.note_failure()
+                try:
+                    # Match the sync loop: the sweep runs even while a stranded
+                    # release pauses claiming, because recovery must not stop with it.
+                    await self.maybe_sweep()
+                    if not release_ready:
+                        # Match the sync loop: never accumulate fresh claims while rows
+                        # already owned by this dispatcher remain stranded.
                         dispatched = 0
                     else:
-                        if not self._pending_release:
-                            self._db_health.note_success()
+                        dispatched = await self.dispatch_batch()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # See the sync dispatcher: surviving a database blip is the whole
+                    # point of a long-running loop.
+                    logger.warning(
+                        "Dispatcher iteration failed; backing off and retrying",
+                        exc_info=True,
+                    )
+                    self._db_health.note_failure()
+                    dispatched = 0
+                else:
+                    if not self._pending_release:
+                        self._db_health.note_success()
 
                 delay = max(
                     self._health.remaining_delay,

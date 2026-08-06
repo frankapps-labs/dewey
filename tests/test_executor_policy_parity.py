@@ -7,7 +7,10 @@ backends cannot drift. These tests hold that line from the outside.
 from __future__ import annotations
 
 # ruff: noqa: E402 — django.setup() must run before model imports
+import asyncio
 import os
+import time
+from datetime import timedelta
 
 import django
 import pytest
@@ -88,6 +91,22 @@ async def test_async_retry_after_is_floored_by_the_policy(async_session):
 
 
 @pytest.mark.asyncio
+async def test_async_completed_at_is_the_completion_time_not_the_claim_time(async_session):
+    @dewey.task("slow.work")
+    async def slow() -> None:
+        await asyncio.sleep(0.05)
+
+    task = await create_task_async(async_session, task_type="slow.work")
+    await async_session.commit()
+
+    assert await process_task_async(async_session, task.id) is True
+
+    row = await async_session.get(TaskEntryModel, task.id)
+    assert row is not None
+    assert row.completed_at >= row.started_at + timedelta(milliseconds=50)
+
+
+@pytest.mark.asyncio
 async def test_async_producer_defaults_come_from_policy(async_session):
     @dewey.task("orders.confirm", queue="critical", priority=7, max_attempts=2)
     async def confirm() -> None: ...
@@ -145,6 +164,23 @@ def test_django_retry_after_is_floored_by_the_policy():
     row = TaskEntry.objects.get(id=task.id)
     assert row.status == TaskStatus.FAILED.value
     assert row.scheduled_for is not None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_django_completed_at_is_the_completion_time_not_the_claim_time():
+    """completed_at must record when the handler finished, not when the row was
+    claimed — retention (purge_completed) and duration dashboards depend on it."""
+    from dewey.django.models import TaskEntry
+
+    @dewey.task("slow.work")
+    def slow() -> None:
+        time.sleep(0.05)
+
+    task = django_create_task(task_type="slow.work")
+    assert django_process_task(task.id) is True
+
+    row = TaskEntry.objects.get(id=task.id)
+    assert row.completed_at >= row.started_at + timedelta(milliseconds=50)
 
 
 @pytest.mark.django_db(transaction=True)

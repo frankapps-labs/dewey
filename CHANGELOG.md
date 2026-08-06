@@ -65,12 +65,11 @@ string to be reused.
 - Django model defaults are module-level callables so migrations can serialise them, and
   Django index names no longer carry the pre-rename `process_after` suffix.
 - Renamed the scheduling column and Python attribute `process_after` → `scheduled_for`
-  across SQLAlchemy models, Django models, dataclasses (`TaskEntry`,
-  `NotificationEntry`), executor / sweep / query kwargs, and partial indexes
-  (`ix_task_entries_pending_scheduled_for`, `ix_task_entries_failed_scheduled_for`,
-  `ix_notif_pending_scheduled_for`, `ix_notif_failed_scheduled_for`). Pre-release
-  setups using `Base.metadata.create_all` or fresh `makemigrations` are unaffected;
-  the rename predates any tagged release.
+  across SQLAlchemy models, Django models, the `TaskEntry` dataclass, executor / sweep /
+  query kwargs, and partial indexes (`ix_task_entries_pending_scheduled_for`,
+  `ix_task_entries_failed_scheduled_for`). Pre-release setups using
+  `Base.metadata.create_all` or fresh `makemigrations` are unaffected; the rename
+  predates any tagged release.
 
 ### Added
 - **Dewey-driven dispatch.** `dewey.dispatcher.Dispatcher` claims ready rows with
@@ -100,8 +99,10 @@ string to be reused.
   `claim()` — the shape a Postgres blip takes — escaped the run loop and ended the
   dispatcher process, so claimed work waited for the dispatch timeout and nothing swept
   at all: a blip became an outage. The loop now logs, backs off and retries, and a
-  release that cannot be written falls through to the dispatch-timeout sweep instead of
-  raising. Found by the resilience lab's `db-outage` scenario.
+  release that cannot be written no longer raises — it is remembered and retried before
+  new work is claimed, as described above, with the dispatch-timeout sweep as the
+  backstop for a dispatcher that crashed outright. Found by the resilience lab's
+  `db-outage` scenario.
 - `dewey.dispatcher.AsyncDispatcher` and
   `dewey.sqlalchemy.dispatch.AsyncSQLAlchemyDispatchBackend`, so an asyncpg-only
   deployment does not have to add a synchronous driver and a second engine to run a
@@ -157,6 +158,28 @@ string to be reused.
   (`tests/_helpers/concurrency.py`) exercising `FOR UPDATE SKIP LOCKED` with
   uuid-suffixed tables, queue-drain-before-join, and child-side tracebacks
   surfaced into the parent.
+
+### Fixed
+- The documented Django dedicated-alias/router deployment is now transactionally
+  correct. `create_task`, `process_task`, the sweep passes, `retry_task` and
+  `kill_task` resolve one database alias up front — an explicit `using=...`
+  argument wins, otherwise the project's routers decide — and run every
+  transaction, `SELECT FOR UPDATE`, write and NOTIFY on it. Previously
+  `transaction.atomic()` always opened on `default` while router-directed queries
+  ran elsewhere, so multi-database projects hit `TransactionManagementError` on
+  `process_task`, and the commit-gated NOTIFY was sent on a connection that never
+  wrote the row. `DjangoDispatchBackend.run_sweep()` now sweeps on the backend's
+  own `using` alias instead of the default connection.
+- Django `completed_at` now records when the task actually finished rather than
+  when the row was claimed, matching the SQLAlchemy backends. Retention and
+  duration reporting no longer omit the handler's own runtime.
+- Claim ordering treats immediate and due scheduled/retried work as one line,
+  ordered by effective due time (`COALESCE(scheduled_for, created_at)`). The
+  previous NULLs-first ordering put every fresh immediate task ahead of the retry
+  backlog, so steady producer traffic could starve due retries indefinitely.
+- Recovery sweeps continue while an unwritable stranded release pauses new claims.
+  A partial release failure can no longer stall retry eligibility and timeout
+  recovery in a single-dispatcher deployment.
 
 ## [0.2.0] - 2026-04-23
 

@@ -100,7 +100,7 @@ DEWEY = {"DISPATCH": "myapp.tasks.adapter.dispatch"}
 ```
 
 That is the whole loop. SQLAlchemy — sync and async — works the same way; see
-[docs/getting-started.md](docs/getting-started.md).
+[docs/getting-started.md](https://github.com/frankapps-labs/dewey/blob/main/docs/getting-started.md).
 
 ## What you get
 
@@ -160,18 +160,18 @@ path. `DEAD → PENDING` is a manual retry.
   purpose: two retry engines over one task is how work runs twice.
 - **Give Dewey its own bounded connection pool** when it shares a database with your
   request handlers, so background pressure cannot become user-visible latency. See
-  [sharing a database](docs/getting-started.md#sharing-a-database-with-your-application).
+  [sharing a database](https://github.com/frankapps-labs/dewey/blob/main/docs/getting-started.md#sharing-a-database-with-your-application).
 
 ## Documentation
 
 | Guide | What it covers |
 |---|---|
-| [Getting started](docs/getting-started.md) | SQLAlchemy sync, SQLAlchemy async, and Django, end to end, plus sharing a database with your app |
-| [Concepts](docs/concepts.md) | States, claims, policy resolution, and the limits of what Dewey guarantees |
-| [Adapters](docs/adapters.md) | The transport contract, and writing your own |
-| [From Huey or Celery](docs/onboarding/from-huey-celery.md) | Pattern-by-pattern migration, one task type at a time |
-| [Query API](docs/query-api.md) | Backlog, stuck work, dead letters, manual retry, purging |
-| [Logging](docs/logging.md) | Correlation metadata across producer, dispatcher and worker |
+| [Getting started](https://github.com/frankapps-labs/dewey/blob/main/docs/getting-started.md) | SQLAlchemy sync, SQLAlchemy async, and Django, end to end, plus sharing a database with your app |
+| [Concepts](https://github.com/frankapps-labs/dewey/blob/main/docs/concepts.md) | States, claims, policy resolution, and the limits of what Dewey guarantees |
+| [Adapters](https://github.com/frankapps-labs/dewey/blob/main/docs/adapters.md) | The transport contract, and writing your own |
+| [From Huey or Celery](https://github.com/frankapps-labs/dewey/blob/main/docs/onboarding/from-huey-celery.md) | Pattern-by-pattern migration, one task type at a time |
+| [Query API](https://github.com/frankapps-labs/dewey/blob/main/docs/query-api.md) | Backlog, stuck work, dead letters, manual retry, purging |
+| [Logging](https://github.com/frankapps-labs/dewey/blob/main/docs/logging.md) | Correlation metadata across producer, dispatcher and worker |
 
 ## Stability
 
@@ -203,4 +203,4 @@ Thanks to [Chad Whitacre](https://github.com/chadwhitacre), the original owner o
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/frankapps-labs/dewey/blob/main/LICENSE).

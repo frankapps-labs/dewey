@@ -7,7 +7,7 @@ import logging
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 
-from sqlalchemy import Engine, or_, select, update
+from sqlalchemy import Engine, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -75,11 +75,13 @@ class SQLAlchemyDispatchBackend:
         """Move up to ``limit`` ready rows to DISPATCHING, committed before return.
 
         Ready means PENDING and due: either unscheduled, or ``scheduled_for`` has
-        passed. Ordering is highest ``priority`` first, then by due time, then
-        oldest first — so a jumped queue does not starve ordinary work of its
-        place in line.
+        passed. Ordering is highest ``priority`` first, then by effective due time
+        — ``coalesce(scheduled_for, created_at)`` — then oldest first. Sorting
+        NULL ``scheduled_for`` ahead of everything instead would let a sustained
+        stream of immediate work starve due scheduled and retried rows forever.
         """
         now = datetime.now(UTC)
+        effective_due = func.coalesce(TaskEntryModel.scheduled_for, TaskEntryModel.created_at)
         candidates = (
             select(TaskEntryModel.id)
             .where(
@@ -91,7 +93,7 @@ class SQLAlchemyDispatchBackend:
             )
             .order_by(
                 TaskEntryModel.priority.desc(),
-                TaskEntryModel.scheduled_for.asc().nulls_first(),
+                effective_due.asc(),
                 TaskEntryModel.created_at.asc(),
             )
             .limit(limit)
@@ -248,8 +250,14 @@ class AsyncSQLAlchemyDispatchBackend:
     # --- claim / release ---
 
     async def claim(self, limit: int) -> list[str]:
-        """Move up to ``limit`` ready rows to DISPATCHING, committed before return."""
+        """Move up to ``limit`` ready rows to DISPATCHING, committed before return.
+
+        Same ordering as the sync backend: priority, then effective due time
+        (``coalesce(scheduled_for, created_at)``), then age — so immediate work
+        cannot starve due scheduled and retried rows.
+        """
         now = datetime.now(UTC)
+        effective_due = func.coalesce(TaskEntryModel.scheduled_for, TaskEntryModel.created_at)
         candidates = (
             select(TaskEntryModel.id)
             .where(
@@ -261,7 +269,7 @@ class AsyncSQLAlchemyDispatchBackend:
             )
             .order_by(
                 TaskEntryModel.priority.desc(),
-                TaskEntryModel.scheduled_for.asc().nulls_first(),
+                effective_due.asc(),
                 TaskEntryModel.created_at.asc(),
             )
             .limit(limit)

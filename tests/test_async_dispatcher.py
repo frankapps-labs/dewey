@@ -72,6 +72,33 @@ class TestClaim:
 
         assert await backend.claim(10) == []
 
+    async def test_due_scheduled_work_competes_with_immediate_work_on_due_time(
+        self, backend, async_session
+    ):
+        """Same guarantee as the sync backend: ordering by effective due time —
+        coalesce(scheduled_for, created_at) — so a sustained stream of immediate
+        work cannot starve scheduled and retried rows that are already due."""
+        older_immediate = await create_task_async(async_session, task_type="t")
+        overdue = await create_task_async(
+            async_session, task_type="t", scheduled_for=datetime.now(UTC) - timedelta(minutes=5)
+        )
+        newer_immediate = await create_task_async(async_session, task_type="t")
+        await async_session.commit()
+        await async_session.execute(
+            update(TaskEntryModel)
+            .where(TaskEntryModel.id == older_immediate.id)
+            .values(created_at=datetime.now(UTC) - timedelta(minutes=10))
+        )
+        await async_session.commit()
+
+        # Waiting longest goes first: the overdue row beats immediate work created
+        # after its due time, without jumping immediate work that was there before.
+        assert await backend.claim(3) == [
+            older_immediate.id,
+            overdue.id,
+            newer_immediate.id,
+        ]
+
     async def test_queue_scoping(self, async_engine, async_session):
         await create_task_async(async_session, task_type="t", queue="bulk")
         critical = await create_task_async(async_session, task_type="t", queue="critical")
@@ -451,6 +478,60 @@ class TestSurvivesDatabaseOutage:
         assert dispatcher._pending_release == [first.id]
         assert await _status(async_session, first.id) == TaskStatus.DISPATCHING.value
         assert await _status(async_session, second.id) == TaskStatus.PENDING.value
+
+    async def test_the_sweep_still_runs_while_a_release_stays_stranded(
+        self, backend, async_session
+    ):
+        """Same guarantee as the sync dispatcher: a persistently unwritable release
+        pauses new claims, but the sweep — retry eligibility and dispatch-timeout
+        recovery — keeps ticking through the pause."""
+        task = await create_task_async(async_session, task_type="t")
+        await async_session.commit()
+
+        async def broken_release(task_ids) -> None:
+            raise ConnectionError("release unavailable")
+
+        async def broken_transport(task_id: str) -> None:
+            raise ConnectionError("redis is down")
+
+        backend.release = broken_release  # type: ignore[method-assign]
+        dispatcher = AsyncDispatcher(
+            backend,
+            broken_transport,
+            batch_size=1,
+            idle_poll_seconds=0.001,
+            sweep_interval_seconds=0.0,
+            dispatch_retry_base_seconds=0.001,
+            database_retry_cap_seconds=0.005,
+        )
+        await dispatcher.dispatch_batch()
+        assert dispatcher._pending_release == [task.id]
+
+        real_sweep = backend.run_sweep
+        sweeps: list[dict[str, list[str]]] = []
+
+        async def counted_sweep() -> dict[str, list[str]]:
+            result = await real_sweep()
+            sweeps.append(result)
+            return result
+
+        real_claim = backend.claim
+        claim_calls: list[int] = []
+
+        async def counted_claim(limit: int) -> list[str]:
+            claim_calls.append(limit)
+            return await real_claim(limit)
+
+        backend.run_sweep = counted_sweep  # type: ignore[method-assign]
+        backend.claim = counted_claim  # type: ignore[method-assign]
+        await dispatcher.run(max_iterations=3)
+
+        assert len(sweeps) == 3  # recovery kept running
+        assert claim_calls == []  # claiming stayed paused
+        assert dispatcher._pending_release == [task.id]  # still held for the next retry
+        assert await _status(async_session, task.id) == TaskStatus.DISPATCHING.value
+        assert dispatcher._health.retry_delay > 0  # transport backoff kept its own deadline
+        assert dispatcher._db_health.retry_delay > 0  # database backoff kept climbing
 
     async def test_elapsed_transport_delay_does_not_extend_database_delay(self, backend):
         clock = [0.0]

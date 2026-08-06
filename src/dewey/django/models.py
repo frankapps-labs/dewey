@@ -6,7 +6,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from django.db import models
+from django.db import models, router
 
 from dewey.core.states import TaskStatus
 
@@ -142,3 +142,16 @@ class TaskEntry(models.Model):
             idempotency_key=self.idempotency_key,
             metadata=self.metadata,
         )
+
+
+def resolve_db_alias(using: str | None = None) -> str:
+    """The database alias Dewey operates on.
+
+    An explicit ``using`` wins. Otherwise the project's database routers decide,
+    exactly as they would for any ORM write, falling back to ``default``. Every
+    Dewey transaction, ``SELECT FOR UPDATE`` and NOTIFY must run on this one
+    alias — ``transaction.atomic()`` does not consult routers, so resolving the
+    alias up front is what keeps the lock, the write and the wake-up in the same
+    transaction on multi-database projects.
+    """
+    return using or router.db_for_write(TaskEntry)

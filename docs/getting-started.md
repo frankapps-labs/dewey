@@ -35,6 +35,15 @@ ships Django models, migrations and a management command.
 pip install "dewey[django,huey]"
 ```
 
+`dewey[django]` brings Django, not a Postgres driver — Django needs one, so install it
+if your project does not already have it:
+
+```bash
+pip install "psycopg[binary]"    # psycopg 3; or: pip install psycopg2-binary
+```
+
+Either driver works; the dispatcher's LISTEN wake-up supports both.
+
 ```python
 # settings.py
 INSTALLED_APPS = [
@@ -342,9 +351,13 @@ DATABASES = {
 DEWEY = {"DISPATCH": "myapp.tasks.adapter.dispatch", "DATABASE": "dewey"}
 ```
 
-You will want a database router so Dewey's models resolve to that alias. Pointing at the
-same physical database through a second alias is a legitimate configuration — the point is
-the separate connection budget, not a separate server.
+You will want a database router so Dewey's models resolve to that alias. Dewey resolves
+the alias through your routers for every transaction, `SELECT FOR UPDATE`, write and
+NOTIFY, so all of them stay on the one connection that holds the lock. If you prefer not
+to add a router, `create_task`, `process_task`, `sweep`, `retry_task` and `kill_task`
+also accept the alias explicitly: `create_task(task_type=..., using="dewey")`. Pointing at
+the same physical database through a second alias is a legitimate configuration — the
+point is the separate connection budget, not a separate server.
 
 **What the lab measures.** Its `cohabitation` and `cohabitation-chaos` scenarios run
 sustained tenant traffic (`SELECT pg_sleep`) against the same Postgres as a live

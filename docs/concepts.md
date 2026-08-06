@@ -137,6 +137,16 @@ The sweep is the recovery pass, and the dispatcher runs it on `sweep_interval_se
 | `sweep_dispatching` | `DISPATCHING` rows older than `dispatch_timeout_seconds` | Returns them to `PENDING` |
 | `sweep_stuck` | `PROCESSING` rows older than `stuck_threshold_minutes` | Returns them to `PENDING` |
 
+The dispatch-timeout sweep is the backstop for a dispatcher that *died*. A dispatcher
+that is still running and merely could not write a release — because the database was
+the thing that failed — remembers those IDs and retries the release before claiming more
+work, so recovery there does not wait out `dispatch_timeout_seconds`.
+
+**`stuck_threshold_minutes` must exceed your longest legitimate handler runtime.** The
+stuck sweep cannot tell a slow handler from a dead worker. Set the threshold below a
+real runtime and a handler that is still working is presumed abandoned: the row returns
+to `PENDING` and the task runs a second time, concurrently with the first.
+
 Because `FAILED → PENDING` is a sweep transition, **nothing retries unless something
 runs the sweep.** The dispatcher owning that tick means one process to operate rather
 than two; the functions stay public if you would rather drive them from cron.

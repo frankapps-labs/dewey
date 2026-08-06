@@ -21,16 +21,16 @@ class DispatcherAdapter(Protocol):
     Lifecycle
     ---------
     1. **Construction** — build the adapter with its transport handle
-       (Huey instance, Celery app, etc.) in the worker process *and* in
-       any producer process that will call :meth:`dispatch`.
+       (Huey instance, etc.) in the worker process *and* in any
+       dispatcher process that will call :meth:`dispatch`.
     2. **register(process_fn)** — called once per worker process, before
        the worker pool starts consuming. The protocol does not require
        re-registration to be idempotent; adapters are free to raise if
-       called twice. Producer processes that only call :meth:`dispatch`
+       called twice. Dispatcher processes that only call :meth:`dispatch`
        do not need to call :meth:`register`.
     3. **dispatch(task_id)** — called by the Dewey dispatcher after the
-       claimed row has been committed to ``PROCESSING``. Must be safe to
-       call concurrently from multiple producer processes and must not
+       claimed row has been committed to ``DISPATCHING``. Must be safe to
+       call concurrently from multiple dispatcher processes and must not
        block on the task completing.
 
     The protocol is :func:`runtime_checkable`, so adapters can be

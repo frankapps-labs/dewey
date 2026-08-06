@@ -9,7 +9,7 @@ from django.db.models import Count
 
 from dewey.core.states import TaskStatus
 from dewey.core.types import TaskEntry as TaskEntryDC
-from dewey.django.models import TaskEntry
+from dewey.django.models import TaskEntry, resolve_db_alias
 
 
 def _to_list(qs) -> list[TaskEntryDC]:
@@ -124,23 +124,28 @@ def get_recent(
 # --- Actions ---
 
 
-@transaction.atomic
-def retry_task(task_id: str) -> TaskEntryDC | None:
-    """Reset a failed/dead task back to pending for re-processing."""
-    try:
-        task = TaskEntry.objects.select_for_update().get(id=task_id)
-    except TaskEntry.DoesNotExist:
-        return None
+def retry_task(task_id: str, using: str | None = None) -> TaskEntryDC | None:
+    """Reset a failed/dead task back to pending for re-processing.
 
-    if not TaskStatus(task.status).can_transition_to(TaskStatus.PENDING):
+    ``using`` pins the action to a database alias; when omitted, the project's
+    routers decide.
+    """
+    alias = resolve_db_alias(using)
+    with transaction.atomic(using=alias):
+        try:
+            task = TaskEntry.objects.using(alias).select_for_update().get(id=task_id)
+        except TaskEntry.DoesNotExist:
+            return None
+
+        if not TaskStatus(task.status).can_transition_to(TaskStatus.PENDING):
+            return task.to_dataclass()
+
+        task.status = TaskStatus.PENDING.value
+        task.scheduled_for = None
+        task.error = ""
+        task.attempts = 0
+        task.save(update_fields=["status", "scheduled_for", "error", "attempts", "updated_at"])
         return task.to_dataclass()
-
-    task.status = TaskStatus.PENDING.value
-    task.scheduled_for = None
-    task.error = ""
-    task.attempts = 0
-    task.save(update_fields=["status", "scheduled_for", "error", "attempts", "updated_at"])
-    return task.to_dataclass()
 
 
 def bulk_retry(
@@ -169,20 +174,25 @@ def bulk_retry(
     )
 
 
-@transaction.atomic
-def kill_task(task_id: str) -> TaskEntryDC | None:
-    """Force a task to DEAD — stop retrying."""
-    try:
-        task = TaskEntry.objects.select_for_update().get(id=task_id)
-    except TaskEntry.DoesNotExist:
-        return None
+def kill_task(task_id: str, using: str | None = None) -> TaskEntryDC | None:
+    """Force a task to DEAD — stop retrying.
 
-    if not TaskStatus(task.status).can_transition_to(TaskStatus.DEAD):
+    ``using`` pins the action to a database alias; when omitted, the project's
+    routers decide.
+    """
+    alias = resolve_db_alias(using)
+    with transaction.atomic(using=alias):
+        try:
+            task = TaskEntry.objects.using(alias).select_for_update().get(id=task_id)
+        except TaskEntry.DoesNotExist:
+            return None
+
+        if not TaskStatus(task.status).can_transition_to(TaskStatus.DEAD):
+            return task.to_dataclass()
+
+        task.status = TaskStatus.DEAD.value
+        task.save(update_fields=["status", "updated_at"])
         return task.to_dataclass()
-
-    task.status = TaskStatus.DEAD.value
-    task.save(update_fields=["status", "updated_at"])
-    return task.to_dataclass()
 
 
 def purge_completed(

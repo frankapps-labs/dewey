@@ -8,8 +8,8 @@ live in one worker process indefinitely. Migrate one task type per pull request.
 
 Two things:
 
-1. **The call site.** `f.delay(42)` becomes `create_task("f", args=[42])`. Producers stop
-   importing handler modules.
+1. **The call site.** `f.delay(42)` becomes `create_task(task_type="f", args=[42])`.
+   Producers stop importing handler modules.
 2. **Retry mechanics leave the handler.** `self.retry(...)`, manual delay lists and
    `time.sleep` come out; the handler raises and policy decides.
 
@@ -21,10 +21,10 @@ write id-and-look-up handlers, which is exactly Dewey's shape.
 | Huey / Celery | Dewey |
 |---|---|
 | `@task() def f(event_id): ...` | `@dewey.task("f") def f(event_id): ...` — body unchanged |
-| `f.delay(42)` | `create_task("f", args=[42])` |
-| `f.delay(client_id=42)` | `create_task("f", kwargs={"client_id": 42})` |
-| `f.schedule(args=[42], delay=60)` | `create_task("f", args=[42], scheduled_for=now + timedelta(seconds=60))` |
-| `transaction.on_commit(lambda: f.delay(42))` | `create_task("f", args=[42])` inside the same `atomic()` — the wake-up is already transactional |
+| `f.delay(42)` | `create_task(task_type="f", args=[42])` |
+| `f.delay(client_id=42)` | `create_task(task_type="f", kwargs={"client_id": 42})` |
+| `f.schedule(args=[42], delay=60)` | `create_task(task_type="f", args=[42], scheduled_for=now + timedelta(seconds=60))` |
+| `transaction.on_commit(lambda: f.delay(42))` | `create_task(task_type="f", args=[42])` inside the same `atomic()` — the wake-up is already transactional |
 | `RETRY_DELAYS = [3, 3, 3]` walked by hand | `@dewey.task("f", max_attempts=3, backoff=dewey.Constant(3))` |
 | `@app.task(bind=True)` + `raise self.retry(countdown=120)` | `raise dewey.TransientError(...)` with `backoff=dewey.Exponential(base_s=120)` |
 | `raise self.retry(countdown=e.retry_after)` | `raise dewey.RetryAfter(e.retry_after)` |

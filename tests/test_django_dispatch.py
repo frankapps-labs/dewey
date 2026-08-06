@@ -68,6 +68,18 @@ class TestClaim:
         high = create_task(task_type="t", priority=100)
         assert backend.claim(2) == [high.id, low.id]
 
+    def test_a_due_retry_is_not_starved_by_newer_immediate_work(self, backend):
+        """Immediate and due scheduled work share one effective due-time order.
+
+        A retry that came due a minute ago must beat a task created just now.
+        The old NULLs-first ordering put every fresh immediate task ahead of the
+        whole retry backlog, so steady producer traffic starved retries forever.
+        """
+        retry = create_task(task_type="t", scheduled_for=datetime.now(UTC) - timedelta(minutes=1))
+        fresh = create_task(task_type="t")
+
+        assert backend.claim(2) == [retry.id, fresh.id]
+
     def test_queue_scoping(self):
         create_task(task_type="t", queue="bulk")
         critical = create_task(task_type="t", queue="critical")
