@@ -7,7 +7,7 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 
 from dewey.core.backoff import BackoffFn
 from dewey.core.execution import classify_failure, resolve_handler
@@ -85,6 +85,82 @@ def create_task(
 
     logger.info("Task created id=%s type=%s queue=%s", task.id, task_type, queue)
     return task.to_dataclass()
+
+
+def create_or_get_task(
+    *,
+    task_type: str,
+    idempotency_key: str,
+    args: Sequence[Any] | None = None,
+    kwargs: dict[str, Any] | None = None,
+    queue: str | None = None,
+    priority: int | None = None,
+    max_attempts: int | None = None,
+    scheduled_for: datetime | None = None,
+    expires_at: datetime | None = None,
+    metadata: dict[str, Any] | None = None,
+    using: str | None = None,
+) -> TaskEntryDC:
+    """Create once, or return the identical existing task without aborting the caller."""
+    from dewey.errors import IdempotencyConflictError
+
+    if not idempotency_key:
+        raise ValueError("create_or_get_task requires a non-empty idempotency_key")
+    if expires_at is not None and expires_at.utcoffset() is None:
+        raise ValueError("expires_at must be a timezone-aware datetime")
+    policy = resolve_policy(task_type)
+    resolved_queue = policy.queue if queue is None else queue
+    resolved_priority = policy.priority if priority is None else priority
+    resolved_max_attempts = policy.max_attempts if max_attempts is None else max_attempts
+    expected = {
+        "task_type": task_type,
+        "args": encode_args(args),
+        "kwargs": encode_kwargs(kwargs),
+        "queue": resolved_queue,
+        "priority": resolved_priority,
+        "max_attempts": resolved_max_attempts,
+        "scheduled_for": scheduled_for,
+        "expires_at": expires_at,
+    }
+    alias = resolve_db_alias(using)
+    with transaction.atomic(using=alias):
+        try:
+            with transaction.atomic(using=alias):
+                return create_task(
+                    task_type=task_type,
+                    args=args,
+                    kwargs=kwargs,
+                    queue=resolved_queue,
+                    priority=resolved_priority,
+                    max_attempts=resolved_max_attempts,
+                    scheduled_for=scheduled_for,
+                    expires_at=expires_at,
+                    idempotency_key=idempotency_key,
+                    metadata=metadata,
+                    using=alias,
+                )
+        except IntegrityError as exc:
+            try:
+                existing = TaskEntry.objects.using(alias).get(
+                    task_type=task_type,
+                    idempotency_key=idempotency_key,
+                )
+            except TaskEntry.DoesNotExist:
+                raise exc from None
+            actual = {
+                "task_type": existing.task_type,
+                "args": existing.args,
+                "kwargs": existing.kwargs,
+                "queue": existing.queue,
+                "priority": existing.priority,
+                "max_attempts": existing.max_attempts,
+                "scheduled_for": existing.initial_scheduled_for,
+                "expires_at": existing.expires_at,
+            }
+            differing = tuple(name for name, value in expected.items() if actual[name] != value)
+            if differing:
+                raise IdempotencyConflictError(differing) from exc
+            return existing.to_dataclass()
 
 
 def process_task(

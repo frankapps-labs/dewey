@@ -1,7 +1,11 @@
 """SQLAlchemy integration for Dewey — sync/async execution, dispatch, sweep, and queries."""
 
 # Async API
-from dewey.sqlalchemy.async_executor import create_task_async, process_task_async
+from dewey.sqlalchemy.async_executor import (
+    create_or_get_task_async,
+    create_task_async,
+    process_task_async,
+)
 from dewey.sqlalchemy.async_queries import (
     bulk_retry_async,
     get_dead_async,
@@ -29,7 +33,7 @@ from dewey.sqlalchemy.dispatch import (
     AsyncSQLAlchemyDispatchBackend,
     SQLAlchemyDispatchBackend,
 )
-from dewey.sqlalchemy.executor import create_task, process_task
+from dewey.sqlalchemy.executor import create_or_get_task, create_task, process_task
 from dewey.sqlalchemy.listen import (
     DEFAULT_WORK_CHANNEL,
     AsyncPostgresWorkListener,
@@ -77,6 +81,7 @@ __all__ = [
     "notify_work_available_async",
     # --- Sync API ---
     # Task executor
+    "create_or_get_task",
     "create_task",
     "process_task",
     # Task sweep
@@ -102,6 +107,7 @@ __all__ = [
     "purge_completed",
     # --- Async API ---
     # Task executor
+    "create_or_get_task_async",
     "create_task_async",
     "process_task_async",
     # Task sweep

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 _LAZY: dict[str, str] = {
     # Executor
     "create_task": "dewey.django.executor",
+    "create_or_get_task": "dewey.django.executor",
     "process_task": "dewey.django.executor",
     # Sweep
     "sweep": "dewey.django.sweep",
@@ -36,6 +37,9 @@ _LAZY: dict[str, str] = {
 }
 
 if TYPE_CHECKING:  # re-exported for type checkers and IDE completion
+    from dewey.django.executor import (
+        create_or_get_task as create_or_get_task,
+    )
     from dewey.django.executor import (
         create_task as create_task,
     )
@@ -102,6 +106,7 @@ if TYPE_CHECKING:  # re-exported for type checkers and IDE completion
 
 __all__ = [
     "bulk_retry",
+    "create_or_get_task",
     "create_task",
     "get_dead",
     "get_dispatching",
