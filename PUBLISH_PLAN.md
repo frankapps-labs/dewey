@@ -148,7 +148,7 @@ integration target.
       project, and PyPI never permits reusing a version string.
 - [x] Dispatcher and TaskPolicy changes recorded there. Safety checks are deferred
       (Phase 5).
-- [ ] Date-stamp changelog at tag time.
+- [x] Date-stamp changelog at tag time.
 - [x] Define 1.0 release gate in README/changelog notes: at least one real
       consumer must validate the public API before `1.0`.
 

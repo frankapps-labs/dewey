@@ -1,7 +1,7 @@
 # Dewey 0.4.0 — release candidate report
 
-**Status:** awaiting human approval. Nothing is tagged and nothing is published.
-**Branch:** `release/0.4.0`
+**Status:** approved and merged to `main`; awaiting the `v0.4.0` tag and publication.
+**Branch:** `main`
 **Date:** 2026-08-06
 
 ---
@@ -294,8 +294,8 @@ lab's `reports/latest.md` at `27820d6`.
 - [x] PyPI project ownership confirmed (maintainer owns the `dewey` project)
 - [x] `archive/celery-adapter-enqueue-era` and `archive/notification-ledger-0.4`
       pushed, so the changelog's references are true for anyone reading it
-- [ ] `release/0.4.0` merged to `main`, CI green there
-- [ ] `CHANGELOG.md` heading dated
+- [x] `release/0.4.0` merged to `main`, CI green there
+- [x] `CHANGELOG.md` heading dated
 - [ ] `git tag v0.4.0 && git push --tags`
 - [ ] PyPI shows 0.4.0; `pip install dewey==0.4.0` in a clean venv
 - [ ] GitHub release created from the changelog section
