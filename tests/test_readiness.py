@@ -19,7 +19,7 @@ from django.test import override_settings
 
 from dewey import __version__
 from dewey.core.heartbeat import DispatcherHeartbeat as HeartbeatDC
-from dewey.dispatcher import Dispatcher
+from dewey.dispatcher import AsyncDispatcher, Dispatcher
 from dewey.django.checks import check_dewey_configuration
 from dewey.django.dispatch import DjangoDispatchBackend
 from dewey.django.models import DispatcherHeartbeat
@@ -90,6 +90,26 @@ class TestSQLAlchemyHeartbeat:
             idle_poll_seconds=0,
             sweep_interval_seconds=None,
         ).run(max_iterations=1)
+
+
+@pytest.mark.asyncio
+async def test_async_heartbeat_failure_does_not_stop_dispatch(async_engine, monkeypatch):
+    backend = AsyncSQLAlchemyDispatchBackend(async_engine)
+
+    async def fail_heartbeat():
+        raise OSError("heartbeat unavailable")
+
+    async def no_wait(timeout):
+        return False
+
+    monkeypatch.setattr(backend, "heartbeat", fail_heartbeat)
+    monkeypatch.setattr(backend, "wait_for_work", no_wait)
+    await AsyncDispatcher(
+        backend,
+        record_dispatch,
+        idle_poll_seconds=0,
+        sweep_interval_seconds=None,
+    ).run(max_iterations=1)
 
 
 @pytest.mark.asyncio
