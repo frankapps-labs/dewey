@@ -243,6 +243,12 @@ class TestDoctor:
             finding["id"] for finding in payload["findings"]
         }
 
+    @override_settings(DEWEY={"DISPATCH": record_dispatch})
+    def test_scoped_heartbeat_cannot_claim_readiness_for_all_queues(self):
+        self._heartbeat(queues=["critical"])
+        with pytest.raises(CommandError):
+            call_command("dewey_doctor", "--format", "json", stdout=StringIO())
+
     @override_settings(DEWEY={"DISPATCH": record_dispatch, "QUEUES": ["critical"]})
     def test_wrong_queue_heartbeat_fails_closed(self):
         self._heartbeat(queues=["bulk"])

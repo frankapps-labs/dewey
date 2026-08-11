@@ -26,7 +26,9 @@ def check_dewey_configuration(app_configs=None, **kwargs):
     except Exception as exc:
         return [Error(str(exc), id="dewey.E001")]
 
+    producer_alias = router.db_for_write(TaskEntry)
     aliases = {
+        "producer": producer_alias,
         "dispatcher": config["DATABASE"],
         "worker": config["WORKER_DATABASE"],
     }
@@ -78,7 +80,6 @@ def check_dewey_configuration(app_configs=None, **kwargs):
             )
         )
 
-    producer_alias = router.db_for_write(TaskEntry)
     dispatcher_alias = config["DATABASE"]
     if producer_alias == dispatcher_alias and dispatcher_alias != "default":
         findings.append(

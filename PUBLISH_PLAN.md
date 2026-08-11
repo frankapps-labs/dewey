@@ -157,7 +157,7 @@ integration target.
 
 ## Phase 8 — Changelog/version/release polish
 
-- [x] Changelog section is `[0.4.0] - Unreleased`. `0.3.0` cannot be published:
+- [x] Changelog section is `[0.4.0] - 2026-08-06`. `0.3.0` could not be published:
       PyPI's `dewey` project already carries `0.3` and `0.3.0` from the original
       project, and PyPI never permits reusing a version string.
 - [x] Dispatcher and TaskPolicy changes recorded there. Safety checks are deferred

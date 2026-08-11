@@ -231,9 +231,14 @@ class SQLAlchemyDispatchBackend:
                 session.add(row)
             else:
                 row.last_seen_at = now
+            stale_ids = (
+                select(DispatcherHeartbeatModel.instance_id)
+                .where(DispatcherHeartbeatModel.last_seen_at < cutoff)
+                .limit(1000)
+            )
             session.execute(
                 delete(DispatcherHeartbeatModel).where(
-                    DispatcherHeartbeatModel.last_seen_at < cutoff
+                    DispatcherHeartbeatModel.instance_id.in_(stale_ids)
                 )
             )
             session.commit()
@@ -496,9 +501,14 @@ class AsyncSQLAlchemyDispatchBackend:
                 session.add(row)
             else:
                 row.last_seen_at = now
+            stale_ids = (
+                select(DispatcherHeartbeatModel.instance_id)
+                .where(DispatcherHeartbeatModel.last_seen_at < cutoff)
+                .limit(1000)
+            )
             await session.execute(
                 delete(DispatcherHeartbeatModel).where(
-                    DispatcherHeartbeatModel.last_seen_at < cutoff
+                    DispatcherHeartbeatModel.instance_id.in_(stale_ids)
                 )
             )
             await session.commit()

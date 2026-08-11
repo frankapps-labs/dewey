@@ -167,7 +167,13 @@ class DjangoDispatchBackend:
             },
         )
         cutoff = now - timedelta(days=DEFAULT_HEARTBEAT_RETENTION_DAYS)
-        DispatcherHeartbeat.objects.using(self.using).filter(last_seen_at__lt=cutoff).delete()
+        stale_ids = list(
+            DispatcherHeartbeat.objects.using(self.using)
+            .filter(last_seen_at__lt=cutoff)
+            .values_list("instance_id", flat=True)[:1000]
+        )
+        if stale_ids:
+            DispatcherHeartbeat.objects.using(self.using).filter(instance_id__in=stale_ids).delete()
 
     # --- wake-up ---
 

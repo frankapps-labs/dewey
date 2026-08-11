@@ -7,6 +7,8 @@ whole point, and neither can be proven against a fake.
 from __future__ import annotations
 
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -219,6 +221,44 @@ class TestClaim:
 
         scoped = SQLAlchemyDispatchBackend(engine, queues=["critical"])
         assert scoped.claim(10) == [critical.id]
+
+
+class TestRetryAndExpiryConcurrency:
+    def _race_claim(self, engine) -> list[list[str]]:
+        barrier = threading.Barrier(2)
+
+        def claim() -> list[str]:
+            backend = SQLAlchemyDispatchBackend(engine)
+            barrier.wait(timeout=10)
+            return backend.claim(10)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            return list(pool.map(lambda _index: claim(), range(2)))
+
+    def test_due_failed_retry_is_claimed_once_across_dispatchers(self, engine, session):
+        task = create_task(session, task_type="retry.race", max_attempts=3)
+        task.status = TaskStatus.FAILED.value
+        task.attempts = 1
+        task.scheduled_for = datetime.now(UTC) - timedelta(seconds=1)
+        session.commit()
+
+        claimed = [task_id for batch in self._race_claim(engine) for task_id in batch]
+
+        assert claimed == [task.id]
+        session.expire_all()
+        assert session.get(TaskEntryModel, task.id).status == TaskStatus.DISPATCHING.value
+
+    def test_expiry_claim_race_terminalizes_once_without_dispatch(self, engine, session):
+        task = create_task(session, task_type="expiry.race")
+        task.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        session.commit()
+
+        assert self._race_claim(engine) == [[], []]
+        session.expire_all()
+        row = session.get(TaskEntryModel, task.id)
+        assert row.status == TaskStatus.EXPIRED.value
+        assert row.expired_at is not None
+        assert row.attempts == 0
 
 
 class TestRelease:
@@ -463,6 +503,26 @@ class TestRunLoop:
         ).run(max_iterations=1)
 
         assert waits == [pytest.approx(2.0, abs=0.5)]
+
+    def test_due_but_locked_work_uses_a_small_wait_instead_of_hot_looping(
+        self, backend, collected, monkeypatch
+    ):
+        now = datetime.now(UTC)
+        monkeypatch.setattr(backend, "next_due", lambda: now - timedelta(seconds=1))
+        waits: list[float] = []
+        monkeypatch.setattr(
+            backend, "wait_for_work", lambda timeout: waits.append(timeout) or False
+        )
+
+        Dispatcher(
+            backend,
+            collected.append,
+            idle_poll_seconds=5,
+            sweep_interval_seconds=None,
+            wall_clock=lambda: now,
+        ).run(max_iterations=1)
+
+        assert waits == [0.05]
 
     def test_invalid_batch_size_is_refused(self, backend):
         with pytest.raises(ValueError, match="batch_size"):

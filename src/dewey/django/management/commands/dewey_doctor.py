@@ -73,6 +73,10 @@ class Command(BaseCommand):
                 database=alias,
                 queues=requested,
             )
+            if requested is None:
+                # No queue restriction means readiness for the whole backlog; a
+                # scoped dispatcher cannot satisfy that fail-closed requirement.
+                fresh = [heartbeat for heartbeat in fresh if heartbeat.queues is None]
             if not fresh:
                 queue_text = ", ".join(requested) if requested else "all configured queues"
                 add(

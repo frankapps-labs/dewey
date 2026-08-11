@@ -171,7 +171,12 @@ def _bounded_wait(idle_poll_seconds: float, due_at: datetime | None, now: dateti
         return idle_poll_seconds
     if due_at.tzinfo is None:
         due_at = due_at.replace(tzinfo=UTC)
-    return min(idle_poll_seconds, max(0.0, (due_at - now).total_seconds()))
+    remaining = max(0.0, (due_at - now).total_seconds())
+    # A due row may be SKIP LOCKED by another dispatcher. A zero-second wait would
+    # hot-loop on that visible pre-commit row until its owner commits.
+    if remaining == 0:
+        return min(idle_poll_seconds, 0.05)
+    return min(idle_poll_seconds, remaining)
 
 
 class Dispatcher:

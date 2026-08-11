@@ -141,7 +141,7 @@ def main() -> int:
     def notify(command_id: int) -> None:
         processed.append((command_id,))
 
-    @dewey.task("smoke.always_fails", max_attempts=2, backoff=dewey.Constant(0))
+    @dewey.task("smoke.always_fails", max_attempts=2, backoff=dewey.Constant(1))
     def always_fails(command_id: int) -> None:
         raise dewey.TransientError("recipient unavailable")
 
@@ -205,12 +205,18 @@ def main() -> int:
     check("first failure retries", row.status == "failed", f"status={row.status}")
     check("retry is scheduled by Dewey", row.scheduled_for is not None)
 
-    TaskEntry.objects.filter(id=failing.id).update(
-        scheduled_for=datetime.now(UTC) - timedelta(seconds=1)
-    )
     # A due retry is directly claimable; the 60-second recovery sweep is not in
-    # the latency path.
-    recovered.dispatch_batch()
+    # the latency path. Poll like the dispatcher loop, with a generous CI tolerance.
+    retry_started = time.monotonic()
+    retry_dispatched = 0
+    while time.monotonic() - retry_started < 4:
+        retry_dispatched = recovered.dispatch_batch()
+        if retry_dispatched:
+            break
+        time.sleep(0.05)
+    retry_elapsed = time.monotonic() - retry_started
+    check("retry dispatched near its one-second policy", retry_dispatched == 1)
+    check("retry did not wait for recovery sweep", 0.7 <= retry_elapsed < 4)
     row = TaskEntry.objects.get(id=failing.id)
     check("dead-letters once the budget is spent", row.status == "dead", f"status={row.status}")
     check("dead task is queryable with its error", "unavailable" in row.error)
