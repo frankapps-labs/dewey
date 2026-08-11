@@ -17,12 +17,12 @@ async def test_create_task(async_session):
     task = await create_task_async(
         async_session,
         task_type="scan",
-        payload={"url": "https://example.com"},
+        kwargs={"url": "https://example.com"},
     )
     assert task.id is not None
     assert task.task_type == "scan"
     assert task.status == TaskStatus.PENDING.value
-    assert task.payload == {"url": "https://example.com"}
+    assert task.kwargs == {"url": "https://example.com"}
     assert task.queue == "default"
     assert task.attempts == 0
 
@@ -32,7 +32,7 @@ async def test_create_task_custom_queue_and_priority(async_session):
     task = await create_task_async(
         async_session,
         task_type="report",
-        payload={"id": "r1"},
+        kwargs={"id": "r1"},
         queue="bulk",
         priority=10,
         max_attempts=3,
@@ -47,7 +47,7 @@ async def test_create_task_with_idempotency_key(async_session):
     task = await create_task_async(
         async_session,
         task_type="scan",
-        payload={},
+        kwargs={},
         idempotency_key="scan-abc",
     )
     assert task.idempotency_key == "scan-abc"
@@ -58,7 +58,7 @@ async def test_create_task_with_metadata(async_session):
     task = await create_task_async(
         async_session,
         task_type="scan",
-        payload={},
+        kwargs={},
         metadata={"customer_id": "cust_123"},
     )
     assert task.task_metadata == {"customer_id": "cust_123"}
@@ -72,20 +72,20 @@ async def test_process_task_success(async_session):
     task = await create_task_async(
         async_session,
         task_type="scan",
-        payload={"url": "https://example.com"},
+        kwargs={"url": "https://example.com"},
     )
     await async_session.commit()
 
     calls = []
 
-    async def handler(task_type, payload):
-        calls.append((task_type, payload))
+    async def handler(**kwargs):
+        calls.append(kwargs)
 
     result = await process_task_async(async_session, task.id, handler)
 
     assert result is True
     assert len(calls) == 1
-    assert calls[0] == ("scan", {"url": "https://example.com"})
+    assert calls[0] == {"url": "https://example.com"}
 
     # Verify DB state
     row = await async_session.get(TaskEntryModel, task.id)
@@ -100,11 +100,11 @@ async def test_process_task_failure(async_session):
     task = await create_task_async(
         async_session,
         task_type="scan",
-        payload={},
+        kwargs={},
     )
     await async_session.commit()
 
-    async def failing_handler(task_type, payload):
+    async def failing_handler(**kwargs):
         raise RuntimeError("browser crashed")
 
     result = await process_task_async(async_session, task.id, failing_handler)
@@ -119,11 +119,11 @@ async def test_process_task_failure(async_session):
 
 @pytest.mark.asyncio
 async def test_process_task_failure_backoff_starts_at_failure_time(async_session):
-    task = await create_task_async(async_session, task_type="scan", payload={})
+    task = await create_task_async(async_session, task_type="scan", kwargs={})
     await async_session.commit()
     failure_time = None
 
-    async def failing_handler(task_type, payload):
+    async def failing_handler(**kwargs):
         nonlocal failure_time
         await asyncio.sleep(0.01)
         failure_time = datetime.now(UTC)
@@ -139,7 +139,7 @@ async def test_process_task_failure_backoff_starts_at_failure_time(async_session
     assert result is False
 
     row = await async_session.get(TaskEntryModel, task.id)
-    assert row.process_after >= failure_time
+    assert row.scheduled_for >= failure_time
 
 
 @pytest.mark.asyncio
@@ -147,12 +147,12 @@ async def test_process_task_dead_letter_after_max_attempts(async_session):
     task = await create_task_async(
         async_session,
         task_type="scan",
-        payload={},
+        kwargs={},
         max_attempts=1,
     )
     await async_session.commit()
 
-    async def failing_handler(task_type, payload):
+    async def failing_handler(**kwargs):
         raise RuntimeError("always fails")
 
     result = await process_task_async(async_session, task.id, failing_handler)
@@ -166,7 +166,7 @@ async def test_process_task_dead_letter_after_max_attempts(async_session):
 
 @pytest.mark.asyncio
 async def test_process_task_not_found(async_session):
-    async def handler(t, p):
+    async def handler(**kwargs):
         pass
 
     result = await process_task_async(async_session, "nonexistent-id", handler)
@@ -178,11 +178,11 @@ async def test_process_task_already_completed(async_session):
     task = await create_task_async(
         async_session,
         task_type="scan",
-        payload={},
+        kwargs={},
     )
     await async_session.commit()
 
-    async def handler(t, p):
+    async def handler(**kwargs):
         pass
 
     # Process once
@@ -194,19 +194,19 @@ async def test_process_task_already_completed(async_session):
 
 
 @pytest.mark.asyncio
-async def test_process_task_respects_process_after(async_session):
+async def test_process_task_respects_scheduled_for(async_session):
     from datetime import datetime, timedelta
 
     future = datetime.now(UTC) + timedelta(hours=1)
     task = await create_task_async(
         async_session,
         task_type="scan",
-        payload={},
-        process_after=future,
+        kwargs={},
+        scheduled_for=future,
     )
     await async_session.commit()
 
-    async def handler(t, p):
+    async def handler(**kwargs):
         pass
 
     result = await process_task_async(async_session, task.id, handler)

@@ -1,59 +1,148 @@
-"""Django adapter for dewey — models, executor, sweep, queries, notifications."""
+"""Django adapter for Dewey — models, executor, sweep, and queries.
+
+Everything here is imported lazily. Dewey's Django models must not be imported
+before Django's app registry is ready, and producers should not pay import-time
+cost for worker and operational APIs they do not use.
+"""
+
+from importlib import import_module
+from typing import TYPE_CHECKING, Any
+
+_LAZY: dict[str, str] = {
+    # Executor
+    "create_task": "dewey.django.executor",
+    "process_task": "dewey.django.executor",
+    # Sweep
+    "sweep": "dewey.django.sweep",
+    "sweep_failed": "dewey.django.sweep",
+    "sweep_stuck": "dewey.django.sweep",
+    "sweep_dispatching": "dewey.django.sweep",
+    # Queries and actions
+    "get_stats": "dewey.django.queries",
+    "get_pending": "dewey.django.queries",
+    "get_dispatching": "dewey.django.queries",
+    "get_processing": "dewey.django.queries",
+    "get_stuck": "dewey.django.queries",
+    "get_failed": "dewey.django.queries",
+    "get_dead": "dewey.django.queries",
+    "get_task": "dewey.django.queries",
+    "get_recent": "dewey.django.queries",
+    "retry_task": "dewey.django.queries",
+    "bulk_retry": "dewey.django.queries",
+    "kill_task": "dewey.django.queries",
+    "purge_completed": "dewey.django.queries",
+}
+
+if TYPE_CHECKING:  # re-exported for type checkers and IDE completion
+    from dewey.django.executor import (
+        create_task as create_task,
+    )
+    from dewey.django.executor import (
+        process_task as process_task,
+    )
+    from dewey.django.queries import (
+        bulk_retry as bulk_retry,
+    )
+    from dewey.django.queries import (
+        get_dead as get_dead,
+    )
+    from dewey.django.queries import (
+        get_dispatching as get_dispatching,
+    )
+    from dewey.django.queries import (
+        get_failed as get_failed,
+    )
+    from dewey.django.queries import (
+        get_pending as get_pending,
+    )
+    from dewey.django.queries import (
+        get_processing as get_processing,
+    )
+    from dewey.django.queries import (
+        get_recent as get_recent,
+    )
+    from dewey.django.queries import (
+        get_stats as get_stats,
+    )
+    from dewey.django.queries import (
+        get_stuck as get_stuck,
+    )
+    from dewey.django.queries import (
+        get_task as get_task,
+    )
+    from dewey.django.queries import (
+        kill_task as kill_task,
+    )
+    from dewey.django.queries import (
+        purge_completed as purge_completed,
+    )
+    from dewey.django.queries import (
+        retry_task as retry_task,
+    )
+    from dewey.django.sweep import (
+        sweep as sweep,
+    )
+    from dewey.django.sweep import (
+        sweep_dispatching as sweep_dispatching,
+    )
+    from dewey.django.sweep import (
+        sweep_failed as sweep_failed,
+    )
+    from dewey.django.sweep import (
+        sweep_stuck as sweep_stuck,
+    )
+
+__all__ = [
+    "bulk_retry",
+    "create_task",
+    "get_dead",
+    "get_dispatching",
+    "get_failed",
+    "get_pending",
+    "get_processing",
+    "get_recent",
+    "get_stats",
+    "get_stuck",
+    "get_task",
+    "kill_task",
+    "process_task",
+    "purge_completed",
+    "retry_task",
+    "sweep",
+    "sweep_dispatching",
+    "sweep_failed",
+    "sweep_stuck",
+]
 
 
-def __getattr__(name: str):
-    """Lazy imports — avoid importing models before Django app registry is ready."""
-    _executor_names = {"create_task", "process_task"}
-    _sweep_names = {"sweep", "sweep_failed", "sweep_stuck"}
-    _query_names = {
-        "get_stats",
-        "get_pending",
-        "get_processing",
-        "get_stuck",
-        "get_failed",
-        "get_dead",
-        "get_task",
-        "get_recent",
-        "retry_task",
-        "bulk_retry",
-        "kill_task",
-        "purge_completed",
-    }
-    _notification_names = {
-        "create_notification",
-        "create_notifications_for_event",
-        "send_notification",
-        "process_notification",
-        "sweep_notifications",
-        "sweep_failed_notifications",
-        "sweep_stuck_notifications",
-        "get_notification",
-        "get_notification_attempts",
-        "get_notification_stats",
-        "get_notifications_for_task",
-        "get_pending_notifications",
-        "get_failed_notifications",
-        "get_dead_notifications",
-        "retry_notification",
-        "kill_notification",
-        "purge_sent_notifications",
-    }
+def __getattr__(name: str) -> Any:
+    """Resolve a public name to its implementation, once.
 
-    if name in _executor_names:
-        from dewey.django.executor import create_task, process_task
+    The resolved object is cached in this module's namespace, which also settles
+    an ambiguity: ``dewey.django.sweep`` is both a submodule and a function, and
+    without the cache the name resolves to the function on first access and to the
+    submodule afterwards.
+    """
+    module_path = _LAZY.get(name)
+    if module_path is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    try:
+        module = import_module(module_path)
+    except ModuleNotFoundError as exc:
+        # `import dewey.django` succeeds without Django, because this package imports
+        # nothing at module level. The failure therefore surfaces here, on first use,
+        # where a bare "No module named 'django'" would not say what to do about it.
+        if (exc.name or "").split(".")[0] == "django":
+            raise ModuleNotFoundError(
+                f"dewey.django needs Django, which is not installed. Install it with "
+                f"pip install 'dewey[django]'. (Reaching for {name!r}.)",
+                name=exc.name,
+            ) from exc
+        raise
+    value = getattr(module, name)
+    globals()[name] = value
+    return value
 
-        return locals()[name]
-    if name in _sweep_names:
-        from dewey.django.sweep import sweep, sweep_failed, sweep_stuck
 
-        return locals()[name]
-    if name in _query_names:
-        from dewey.django import queries
-
-        return getattr(queries, name)
-    if name in _notification_names:
-        from dewey.django import notifications
-
-        return getattr(notifications, name)
-
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+def __dir__() -> list[str]:
+    return sorted({*globals(), *_LAZY})

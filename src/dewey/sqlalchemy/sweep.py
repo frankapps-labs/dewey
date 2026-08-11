@@ -17,13 +17,17 @@ logger = logging.getLogger(__name__)
 # Default: tasks stuck in PROCESSING for >10 minutes are considered abandoned
 DEFAULT_STUCK_THRESHOLD_MINUTES = 10
 
+# Default: a row claimed for dispatch but not started within 5 minutes is assumed
+# lost. Must stay above the worst-case broker backlog wait for your deployment.
+DEFAULT_DISPATCH_TIMEOUT_SECONDS = 300
+
 
 def sweep_failed(
     session: Session,
     limit: int = 100,
 ) -> list[str]:
     """
-    Find FAILED tasks ready for retry (process_after has passed).
+    Find FAILED tasks ready for retry (scheduled_for has passed).
     Resets them to PENDING so the broker can pick them up.
 
     Returns list of task IDs that were re-enqueued.
@@ -34,9 +38,9 @@ def sweep_failed(
         select(TaskEntryModel.id)
         .where(
             TaskEntryModel.status == TaskStatus.FAILED.value,
-            TaskEntryModel.process_after <= now,
+            TaskEntryModel.scheduled_for <= now,
         )
-        .order_by(TaskEntryModel.process_after)
+        .order_by(TaskEntryModel.scheduled_for)
         .limit(limit)
     )
     task_ids = list(session.execute(stmt).scalars().all())
@@ -143,17 +147,98 @@ def sweep_stuck(
     return [task_id for task_id, _queue in retry_rows]
 
 
+def sweep_dispatching(
+    session: Session,
+    dispatch_timeout_seconds: int = DEFAULT_DISPATCH_TIMEOUT_SECONDS,
+    limit: int = 100,
+) -> list[str]:
+    """
+    Find tasks a dispatcher claimed but no worker ever picked up, and return them
+    to PENDING so a dispatcher can hand them out again.
+
+    This is the backstop for a dispatcher that died between committing the claim
+    and reaching the transport. A synchronous transport failure does not need it:
+    the dispatcher resets the row itself, immediately.
+
+    ``dispatch_timeout_seconds`` must exceed the worst-case time a task can wait
+    in the broker before a worker starts it, or healthy backlogs get reclaimed
+    and dispatched twice.
+
+    Returns list of task IDs that were reclaimed.
+    """
+    threshold = datetime.now(UTC) - timedelta(seconds=dispatch_timeout_seconds)
+
+    stmt = (
+        select(TaskEntryModel.id)
+        .where(
+            TaskEntryModel.status == TaskStatus.DISPATCHING.value,
+            TaskEntryModel.dispatching_at < threshold,
+        )
+        .order_by(TaskEntryModel.dispatching_at)
+        .limit(limit)
+    )
+    task_ids = list(session.execute(stmt).scalars().all())
+
+    if not task_ids:
+        return []
+
+    retry_rows = list(
+        session.execute(
+            update(TaskEntryModel)
+            .where(
+                TaskEntryModel.id.in_(task_ids),
+                TaskEntryModel.status == TaskStatus.DISPATCHING.value,
+                TaskEntryModel.attempts < TaskEntryModel.max_attempts,
+            )
+            .values(status=TaskStatus.PENDING.value, dispatching_at=None)
+            .returning(TaskEntryModel.id, TaskEntryModel.queue)
+        ).all()
+    )
+    dead_ids = list(
+        session.execute(
+            update(TaskEntryModel)
+            .where(
+                TaskEntryModel.id.in_(task_ids),
+                TaskEntryModel.status == TaskStatus.DISPATCHING.value,
+                TaskEntryModel.attempts >= TaskEntryModel.max_attempts,
+            )
+            .values(status=TaskStatus.DEAD.value, dispatching_at=None)
+            .returning(TaskEntryModel.id)
+        ).scalars()
+    )
+    session.flush()
+    for task_id, queue in retry_rows:
+        notify_work_available(session, kind="task", entry_id=task_id, queue=queue)
+
+    if dead_ids:
+        logger.warning("Sweep dead-lettered %d exhausted dispatching tasks", len(dead_ids))
+    if retry_rows:
+        logger.warning(
+            "Sweep reclaimed %d dispatching tasks (timeout=%ds)",
+            len(retry_rows),
+            dispatch_timeout_seconds,
+        )
+    return [task_id for task_id, _queue in retry_rows]
+
+
 def sweep(
     session: Session,
     stuck_threshold_minutes: int = DEFAULT_STUCK_THRESHOLD_MINUTES,
+    dispatch_timeout_seconds: int = DEFAULT_DISPATCH_TIMEOUT_SECONDS,
     limit: int = 100,
 ) -> dict[str, list[str]]:
     """
-    Run both sweeps. Returns dict with 'failed' and 'stuck' task ID lists.
+    Run every recovery pass. Returns dict with 'failed', 'dispatching' and
+    'stuck' task ID lists.
 
-    Call this from a periodic task (e.g. every 5 minutes).
+    The dispatcher calls this on its own interval. It is also safe to call from
+    cron or a management command — and worth knowing that without something
+    calling it, failed tasks never become eligible for retry.
     """
     return {
         "failed": sweep_failed(session, limit=limit),
+        "dispatching": sweep_dispatching(
+            session, dispatch_timeout_seconds=dispatch_timeout_seconds, limit=limit
+        ),
         "stuck": sweep_stuck(session, stuck_threshold_minutes=stuck_threshold_minutes, limit=limit),
     }

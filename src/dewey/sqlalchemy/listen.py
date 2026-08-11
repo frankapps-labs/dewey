@@ -1,8 +1,8 @@
 """Postgres LISTEN/NOTIFY helpers for wake-on-insert workers.
 
 These helpers are optional accelerators: Dewey's durable source of truth is
-still the task/notification tables. A missed or dropped NOTIFY is harmless as
-long as workers retain a periodic fallback poll/sweep.
+the task ledger. A missed or dropped NOTIFY is harmless as long as dispatchers
+retain their periodic fallback poll and recovery sweep.
 """
 
 from __future__ import annotations
@@ -16,6 +16,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from sqlalchemy.orm import Session
+
+from dewey.listen_sync import work_payload
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +39,7 @@ def _is_postgresql_bind(bind: Any) -> bool:
 
 
 def _payload(kind: str, entry_id: str, queue: str | None = None) -> str:
-    return json.dumps({"kind": kind, "id": entry_id, "queue": queue}, separators=(",", ":"))
+    return work_payload(kind, entry_id, queue)
 
 
 def _parse_payload(payload: str) -> WorkNotification:

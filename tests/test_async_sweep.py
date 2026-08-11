@@ -12,12 +12,12 @@ from dewey.sqlalchemy.models import TaskEntryModel
 
 @pytest.mark.asyncio
 async def test_sweep_failed_re_enqueues(async_session):
-    task = await create_task_async(async_session, task_type="scan", payload={})
+    task = await create_task_async(async_session, task_type="scan", kwargs={})
     await async_session.commit()
 
     row = await async_session.get(TaskEntryModel, task.id)
     row.status = TaskStatus.FAILED.value
-    row.process_after = datetime.now(UTC) - timedelta(minutes=1)
+    row.scheduled_for = datetime.now(UTC) - timedelta(minutes=1)
     await async_session.commit()
 
     ids = await sweep_failed_async(async_session)
@@ -28,13 +28,13 @@ async def test_sweep_failed_re_enqueues(async_session):
 
 
 @pytest.mark.asyncio
-async def test_sweep_failed_skips_future_process_after(async_session):
-    task = await create_task_async(async_session, task_type="scan", payload={})
+async def test_sweep_failed_skips_future_scheduled_for(async_session):
+    task = await create_task_async(async_session, task_type="scan", kwargs={})
     await async_session.commit()
 
     row = await async_session.get(TaskEntryModel, task.id)
     row.status = TaskStatus.FAILED.value
-    row.process_after = datetime.now(UTC) + timedelta(hours=1)
+    row.scheduled_for = datetime.now(UTC) + timedelta(hours=1)
     await async_session.commit()
 
     ids = await sweep_failed_async(async_session)
@@ -43,13 +43,13 @@ async def test_sweep_failed_skips_future_process_after(async_session):
 
 @pytest.mark.asyncio
 async def test_sweep_failed_dead_letters_exhausted_tasks(async_session):
-    task = await create_task_async(async_session, task_type="scan", payload={}, max_attempts=1)
+    task = await create_task_async(async_session, task_type="scan", kwargs={}, max_attempts=1)
     await async_session.commit()
 
     row = await async_session.get(TaskEntryModel, task.id)
     row.status = TaskStatus.FAILED.value
     row.attempts = 1
-    row.process_after = datetime.now(UTC) - timedelta(minutes=1)
+    row.scheduled_for = datetime.now(UTC) - timedelta(minutes=1)
     await async_session.commit()
 
     ids = await sweep_failed_async(async_session)
@@ -61,7 +61,7 @@ async def test_sweep_failed_dead_letters_exhausted_tasks(async_session):
 
 @pytest.mark.asyncio
 async def test_sweep_stuck_resets_abandoned_tasks(async_session):
-    task = await create_task_async(async_session, task_type="scan", payload={})
+    task = await create_task_async(async_session, task_type="scan", kwargs={})
     await async_session.commit()
 
     row = await async_session.get(TaskEntryModel, task.id)
@@ -78,7 +78,7 @@ async def test_sweep_stuck_resets_abandoned_tasks(async_session):
 
 @pytest.mark.asyncio
 async def test_sweep_stuck_leaves_recent_processing(async_session):
-    task = await create_task_async(async_session, task_type="scan", payload={})
+    task = await create_task_async(async_session, task_type="scan", kwargs={})
     await async_session.commit()
 
     row = await async_session.get(TaskEntryModel, task.id)
@@ -92,7 +92,7 @@ async def test_sweep_stuck_leaves_recent_processing(async_session):
 
 @pytest.mark.asyncio
 async def test_sweep_stuck_dead_letters_exhausted_tasks(async_session):
-    task = await create_task_async(async_session, task_type="scan", payload={}, max_attempts=1)
+    task = await create_task_async(async_session, task_type="scan", kwargs={}, max_attempts=1)
     await async_session.commit()
 
     row = await async_session.get(TaskEntryModel, task.id)
@@ -110,14 +110,14 @@ async def test_sweep_stuck_dead_letters_exhausted_tasks(async_session):
 
 @pytest.mark.asyncio
 async def test_sweep_combined(async_session):
-    t1 = await create_task_async(async_session, task_type="scan", payload={})
+    t1 = await create_task_async(async_session, task_type="scan", kwargs={})
     await async_session.commit()
     row1 = await async_session.get(TaskEntryModel, t1.id)
     row1.status = TaskStatus.FAILED.value
-    row1.process_after = datetime.now(UTC) - timedelta(minutes=1)
+    row1.scheduled_for = datetime.now(UTC) - timedelta(minutes=1)
     await async_session.commit()
 
-    t2 = await create_task_async(async_session, task_type="scan", payload={})
+    t2 = await create_task_async(async_session, task_type="scan", kwargs={})
     await async_session.commit()
     row2 = await async_session.get(TaskEntryModel, t2.id)
     row2.status = TaskStatus.PROCESSING.value
@@ -132,4 +132,4 @@ async def test_sweep_combined(async_session):
 @pytest.mark.asyncio
 async def test_sweep_empty(async_session):
     result = await sweep_async(async_session)
-    assert result == {"failed": [], "stuck": []}
+    assert result == {"failed": [], "dispatching": [], "stuck": []}

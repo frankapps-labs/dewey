@@ -3,56 +3,67 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dewey.core.backoff import BackoffFn, default_task_backoff
+from dewey.core.backoff import BackoffFn
+from dewey.core.execution import classify_failure, resolve_handler
 from dewey.core.logging import (
     extract_trace_context,
     reset_trace_context,
     set_trace_context,
 )
-from dewey.core.states import TaskStatus, should_die
+from dewey.core.states import TaskStatus
+from dewey.policy import resolve_policy
+from dewey.serialization import encode_args, encode_kwargs
 from dewey.sqlalchemy.listen import notify_work_available_async
 from dewey.sqlalchemy.models import TaskEntryModel
 
 logger = logging.getLogger(__name__)
 
-# Async handler: receives (task_type, payload) → awaitable result
-AsyncTaskHandler = Callable[[str, dict[str, Any]], Awaitable[Any]]
+# States a worker may claim from. PENDING covers in-process execution with no
+# broker in the path; DISPATCHING covers the normal dispatcher-driven flow.
+_CLAIMABLE = (TaskStatus.PENDING, TaskStatus.DISPATCHING)
+
+# Async handler: awaited as handler(*args, **kwargs) with the decoded task arguments.
+AsyncTaskHandler = Callable[..., Awaitable[Any]]
 
 
 async def create_task_async(
     session: AsyncSession,
     *,
     task_type: str,
-    payload: dict[str, Any] | None = None,
-    queue: str = "default",
-    priority: int = 0,
-    max_attempts: int = 5,
-    process_after: datetime | None = None,
+    args: Sequence[Any] | None = None,
+    kwargs: dict[str, Any] | None = None,
+    queue: str | None = None,
+    priority: int | None = None,
+    max_attempts: int | None = None,
+    scheduled_for: datetime | None = None,
     idempotency_key: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> TaskEntryModel:
     """
     Write a task to the ledger. Async version of create_task().
 
-    After calling this, enqueue the task ID to your broker (Huey, Celery, etc.)
-    using the appropriate adapter.
+    The dispatcher picks the row up from Postgres — producers never talk to a
+    broker.
 
-    Returns the created TaskEntryModel (with .id for enqueue).
+    Returns the created TaskEntryModel (with .id).
     """
+    policy = resolve_policy(task_type)
+    queue = policy.queue if queue is None else queue
     task = TaskEntryModel(
         task_type=task_type,
-        payload=payload or {},
+        args=encode_args(args),
+        kwargs=encode_kwargs(kwargs),
         queue=queue,
-        priority=priority,
-        max_attempts=max_attempts,
-        process_after=process_after,
+        priority=policy.priority if priority is None else priority,
+        max_attempts=policy.max_attempts if max_attempts is None else max_attempts,
+        scheduled_for=scheduled_for,
         idempotency_key=idempotency_key,
         task_metadata=metadata or {},
     )
@@ -68,17 +79,19 @@ async def create_task_async(
 async def process_task_async(
     session: AsyncSession,
     task_id: str,
-    handler: AsyncTaskHandler,
+    handler: AsyncTaskHandler | None = None,
     *,
     backoff: BackoffFn | None = None,
 ) -> bool:
     """
     Process a single task using two-phase commit. Async version of process_task().
 
-    `backoff` is an optional ``(attempts: int) -> timedelta`` function that
-    decides how long to wait before retrying a failed task. Defaults to
-    :func:`dewey.core.backoff.default_task_backoff` (2 min base, 1 hr cap).
-    Useful for fast-retry queues, custom strategies, or deterministic tests.
+    ``handler`` is optional: when omitted, the handler registered for the task type
+    with ``@dewey.task`` is used. Passing one explicitly overrides the registry.
+
+    Retry, dead-letter and backoff behaviour come from the resolved policy.
+    ``backoff`` overrides the policy's backoff for this call, primarily for
+    deterministic tests.
 
     Phase 1: PENDING → PROCESSING (committed — visible to sweep)
     Phase 2: Run async handler
@@ -109,12 +122,16 @@ async def process_task_async(
         logger.info("Task already terminal id=%s status=%s", task_id, task.status)
         return False
 
-    if current_status != TaskStatus.PENDING:
-        logger.info("Task not pending id=%s status=%s", task_id, task.status)
+    # Claimable from PENDING (in-process execution) or DISPATCHING (a dispatcher
+    # already handed this ID to the transport). Anything else means another worker
+    # got there first, or an operator intervened — a duplicate delivery is a
+    # logged no-op, never an error.
+    if current_status not in _CLAIMABLE:
+        logger.info("Task not claimable id=%s status=%s", task_id, task.status)
         return False
 
-    if task.process_after and task.process_after > now:
-        logger.info("Task not ready id=%s process_after=%s", task_id, task.process_after)
+    if task.scheduled_for and task.scheduled_for > now:
+        logger.info("Task not ready id=%s scheduled_for=%s", task_id, task.scheduled_for)
         return False
 
     if not current_status.can_transition_to(TaskStatus.PROCESSING):
@@ -123,25 +140,28 @@ async def process_task_async(
 
     task.status = TaskStatus.PROCESSING.value
     task.started_at = now
+    task.dispatching_at = None
     task.attempts += 1
 
     # Cache values before commit (objects expire after commit)
     task_type = task.task_type
-    payload = dict(task.payload)
+    task_args = list(task.args or [])
+    task_kwargs = dict(task.kwargs or {})
     attempts = task.attempts
     max_attempts = task.max_attempts
     task_metadata = dict(task.task_metadata or {})
+    policy = resolve_policy(task_type)
 
     await session.commit()  # PROCESSING is now visible — sweep can find stuck tasks
 
-    # Restore the trace context captured at task/notification creation
+    # Restore the trace context captured at task creation
     # time so every log line through Phase 2 and Phase 3 is correlated
     # with the originating request.
     _trace_token = set_trace_context(extract_trace_context(task_metadata))
     try:
         # Phase 2: Execute async handler
         try:
-            await handler(task_type, payload)
+            await resolve_handler(task_type, handler, policy=policy)(*task_args, **task_kwargs)
         except Exception as exc:
             # Phase 3a: Mark failed or dead-lettered
             error_msg = str(exc)
@@ -165,26 +185,34 @@ async def process_task_async(
                 return False
 
             task.error = error_msg
-            failure_now = datetime.now(UTC)
+            outcome = classify_failure(
+                exc,
+                policy=policy,
+                attempts=attempts,
+                max_attempts=max_attempts,
+                now=datetime.now(UTC),
+                backoff=backoff,
+            )
+            task.status = outcome.status.value
 
-            if should_die(attempts, max_attempts):
-                task.status = TaskStatus.DEAD.value
+            if outcome.is_dead:
                 logger.error(
-                    "Task dead-lettered id=%s type=%s attempts=%d error=%s",
+                    "Task dead-lettered id=%s type=%s attempts=%d reason=%s error=%s",
                     task_id,
                     task_type,
                     attempts,
+                    outcome.reason,
                     exc,
                 )
             else:
-                task.status = TaskStatus.FAILED.value
-                task.process_after = failure_now + (backoff or default_task_backoff)(attempts)
+                task.scheduled_for = outcome.retry_at
                 logger.warning(
-                    "Task failed id=%s type=%s attempts=%d/%d error=%s",
+                    "Task failed id=%s type=%s attempts=%d/%d retry_at=%s error=%s",
                     task_id,
                     task_type,
                     attempts,
                     max_attempts,
+                    outcome.retry_at,
                     exc,
                 )
 

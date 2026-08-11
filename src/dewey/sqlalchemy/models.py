@@ -45,13 +45,16 @@ class TaskEntryModel(Base):
         String(20), nullable=False, default=TaskStatus.PENDING.value, index=True
     )
 
-    # Payload — stored as JSON (works on all databases including SQLite).
-    # Dewey never queries inside these columns — they're passed through to handlers.
+    # Handler arguments — stored as JSON (works on all databases including SQLite).
+    # Dewey never queries inside these columns — they're decoded and splatted into
+    # the registered handler as ``handler(*args, **kwargs)``.
     #
     # To enable Postgres JSONB operators (->>, @>, GIN indexes):
-    #   ALTER TABLE task_entries ALTER COLUMN payload TYPE jsonb USING payload::jsonb;
+    #   ALTER TABLE task_entries ALTER COLUMN args TYPE jsonb USING args::jsonb;
+    #   ALTER TABLE task_entries ALTER COLUMN kwargs TYPE jsonb USING kwargs::jsonb;
     #   ALTER TABLE task_entries ALTER COLUMN metadata TYPE jsonb USING metadata::jsonb;
-    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    args: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    kwargs: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     task_metadata: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
 
     # Queue routing
@@ -70,7 +73,8 @@ class TaskEntryModel(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
     )
-    process_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    dispatching_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -78,7 +82,8 @@ class TaskEntryModel(Base):
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     __table_args__ = (
-        # Partial unique: idempotency only enforced when key is set
+        # Idempotency is only enforced when a key is set: Postgres treats NULLs as
+        # distinct, so rows without a key never collide with each other.
         UniqueConstraint(
             "task_type",
             "idempotency_key",
@@ -87,9 +92,15 @@ class TaskEntryModel(Base):
         # Partial index: sweep picks up PENDING tasks ready to process
         # Only indexes rows where status='pending' — tiny index, fast scan
         Index(
-            "ix_task_entries_pending_process_after",
-            "process_after",
+            "ix_task_entries_pending_scheduled_for",
+            "scheduled_for",
             postgresql_where=(status == TaskStatus.PENDING.value),
+        ),
+        # Partial index: sweep finds rows a dispatcher claimed but no worker took
+        Index(
+            "ix_task_entries_dispatching_at",
+            "dispatching_at",
+            postgresql_where=(status == TaskStatus.DISPATCHING.value),
         ),
         # Partial index: sweep finds stuck PROCESSING tasks
         # Only indexes rows where status='processing' — at most a handful at any time
@@ -100,8 +111,8 @@ class TaskEntryModel(Base):
         ),
         # Partial index: failed tasks eligible for retry
         Index(
-            "ix_task_entries_failed_process_after",
-            "process_after",
+            "ix_task_entries_failed_scheduled_for",
+            "scheduled_for",
             postgresql_where=(status == TaskStatus.FAILED.value),
         ),
         # Composite: recent tasks by type (dashboard queries)

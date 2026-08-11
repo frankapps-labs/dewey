@@ -16,7 +16,8 @@ class TaskEntry:
     id: str
     task_type: str
     status: TaskStatus
-    payload: dict[str, Any]
+    args: list[Any]
+    kwargs: dict[str, Any]
     queue: str
     priority: int
     attempts: int
@@ -24,7 +25,8 @@ class TaskEntry:
     error: str
     created_at: datetime
     updated_at: datetime
-    process_after: datetime | None = None
+    scheduled_for: datetime | None = None
+    dispatching_at: datetime | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
     idempotency_key: str | None = None

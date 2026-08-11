@@ -9,10 +9,6 @@ DEFAULT_BASE_DELAY_SECONDS = 120  # 2 minutes
 DEFAULT_MAX_DELAY_SECONDS = 3600  # 1 hour cap
 DEFAULT_JITTER_FRACTION = 0.25  # ±25% jitter
 
-# Notifications retry faster than tasks because they're user-facing.
-DEFAULT_NOTIFICATION_BASE_DELAY_SECONDS = 60  # 1 minute
-DEFAULT_NOTIFICATION_MAX_DELAY_SECONDS = 1800  # 30 minute cap
-
 
 # Signature for a custom backoff strategy.
 # Given the number of attempts so far, return how long to wait before retrying.
@@ -23,16 +19,6 @@ def default_task_backoff(attempts: int) -> timedelta:
     """Default backoff used by process_task / process_task_async when no
     `backoff` argument is supplied. 2 min base, 1 hr cap, ±25% jitter."""
     return retry_delay(attempts)
-
-
-def default_notification_backoff(attempts: int) -> timedelta:
-    """Default backoff used by send_notification / send_notification_async
-    when no `backoff` argument is supplied. 1 min base, 30 min cap, ±25% jitter."""
-    return retry_delay(
-        attempts,
-        base_delay=DEFAULT_NOTIFICATION_BASE_DELAY_SECONDS,
-        max_delay=DEFAULT_NOTIFICATION_MAX_DELAY_SECONDS,
-    )
 
 
 def retry_delay(

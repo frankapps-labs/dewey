@@ -18,24 +18,41 @@ class TestCreateTask:
         assert task.id is not None
         assert task.task_type == "order.confirmed"
         assert task.status == TaskStatus.PENDING.value
-        assert task.payload == {}
+        assert task.args == []
+        assert task.kwargs == {}
         assert task.queue == "default"
         assert task.priority == 0
         assert task.max_attempts == 5
 
-    def test_creates_with_payload(self, session):
+    def test_creates_with_kwargs(self, session):
         task = create_task(
             session,
             task_type="order.confirmed",
-            payload={"order_id": "ORD-123"},
+            kwargs={"order_id": "ORD-123"},
             queue="critical",
             priority=100,
             max_attempts=3,
         )
-        assert task.payload == {"order_id": "ORD-123"}
+        assert task.args == []
+        assert task.kwargs == {"order_id": "ORD-123"}
         assert task.queue == "critical"
         assert task.priority == 100
         assert task.max_attempts == 3
+
+    def test_creates_with_positional_args(self, session):
+        task = create_task(session, task_type="report.build", args=[42, "monthly"])
+        assert task.args == [42, "monthly"]
+        assert task.kwargs == {}
+
+    def test_creates_with_args_and_kwargs(self, session):
+        task = create_task(
+            session,
+            task_type="report.build",
+            args=[42],
+            kwargs={"period": "monthly"},
+        )
+        assert task.args == [42]
+        assert task.kwargs == {"period": "monthly"}
 
     def test_creates_with_idempotency_key(self, session):
         task = create_task(
@@ -45,14 +62,14 @@ class TestCreateTask:
         )
         assert task.idempotency_key == "order-123-confirm"
 
-    def test_creates_with_process_after(self, session):
+    def test_creates_with_scheduled_for(self, session):
         future = datetime(2026, 12, 1, tzinfo=UTC)
         task = create_task(
             session,
             task_type="reminder.send",
-            process_after=future,
+            scheduled_for=future,
         )
-        assert task.process_after == future
+        assert task.scheduled_for == future
 
     def test_creates_with_metadata(self, session):
         task = create_task(
@@ -65,12 +82,11 @@ class TestCreateTask:
 
 class TestProcessTask:
     def test_successful_processing(self, session):
-        task = create_task(session, task_type="test.task", payload={"x": 1})
+        task = create_task(session, task_type="test.task", kwargs={"x": 1})
         session.commit()
 
-        def handler(task_type, payload):
-            assert task_type == "test.task"
-            assert payload == {"x": 1}
+        def handler(**kwargs):
+            assert kwargs == {"x": 1}
 
         result = process_task(session, task.id, handler)
         assert result is True
@@ -88,7 +104,7 @@ class TestProcessTask:
         task = create_task(session, task_type="test.task", max_attempts=5)
         session.commit()
 
-        def handler(task_type, payload):
+        def handler(**kwargs):
             raise ValueError("Something went wrong")
 
         result = process_task(session, task.id, handler)
@@ -100,14 +116,14 @@ class TestProcessTask:
         assert updated.status == TaskStatus.FAILED.value
         assert updated.attempts == 1
         assert "Something went wrong" in updated.error
-        assert updated.process_after is not None  # Backoff set
+        assert updated.scheduled_for is not None  # Backoff set
 
     def test_failed_processing_backoff_starts_at_failure_time(self, session):
         task = create_task(session, task_type="test.task", max_attempts=5)
         session.commit()
         failure_time = None
 
-        def handler(task_type, payload):
+        def handler(**kwargs):
             nonlocal failure_time
             time.sleep(0.01)
             failure_time = datetime.now(UTC)
@@ -119,13 +135,13 @@ class TestProcessTask:
         updated = session.execute(
             select(TaskEntryModel).where(TaskEntryModel.id == task.id)
         ).scalar_one()
-        assert updated.process_after >= failure_time
+        assert updated.scheduled_for >= failure_time
 
     def test_dead_letter_after_max_attempts(self, session):
         task = create_task(session, task_type="test.task", max_attempts=1)
         session.commit()
 
-        def handler(task_type, payload):
+        def handler(**kwargs):
             raise ValueError("Fatal")
 
         result = process_task(session, task.id, handler)
@@ -144,7 +160,7 @@ class TestProcessTask:
 
         called = False
 
-        def handler(task_type, payload):
+        def handler(**kwargs):
             nonlocal called
             called = True
 
@@ -153,7 +169,7 @@ class TestProcessTask:
         assert called is False
 
     def test_skip_nonexistent_task(self, session):
-        def handler(task_type, payload):
+        def handler(**kwargs):
             pass
 
         result = process_task(session, "nonexistent-id", handler)
@@ -164,16 +180,16 @@ class TestProcessTask:
         task.status = TaskStatus.PROCESSING.value
         session.commit()
 
-        result = process_task(session, task.id, lambda t, p: None)
+        result = process_task(session, task.id, lambda **kw: None)
         assert result is False
 
     def test_skip_task_not_ready(self, session):
-        """Tasks with future process_after should be skipped."""
+        """Tasks with future scheduled_for should be skipped."""
         future = datetime.now(UTC) + timedelta(hours=1)
-        task = create_task(session, task_type="test.task", process_after=future)
+        task = create_task(session, task_type="test.task", scheduled_for=future)
         session.commit()
 
-        result = process_task(session, task.id, lambda t, p: None)
+        result = process_task(session, task.id, lambda **kw: None)
         assert result is False
 
         updated = session.execute(
@@ -181,13 +197,13 @@ class TestProcessTask:
         ).scalar_one()
         assert updated.status == TaskStatus.PENDING.value
 
-    def test_processes_task_past_process_after(self, session):
-        """Tasks with past process_after should be processed."""
+    def test_processes_task_past_scheduled_for(self, session):
+        """Tasks with past scheduled_for should be processed."""
         past = datetime.now(UTC) - timedelta(minutes=5)
-        task = create_task(session, task_type="test.task", process_after=past)
+        task = create_task(session, task_type="test.task", scheduled_for=past)
         session.commit()
 
-        result = process_task(session, task.id, lambda t, p: None)
+        result = process_task(session, task.id, lambda **kw: None)
         assert result is True
 
     def test_processing_state_committed(self, session, engine):
@@ -202,7 +218,7 @@ class TestProcessTask:
         handler_started = threading.Event()
         handler_continue = threading.Event()
 
-        def slow_handler(task_type, payload):
+        def slow_handler(**kwargs):
             handler_started.set()
             handler_continue.wait(timeout=10)
 
@@ -237,7 +253,7 @@ class TestProcessTask:
         handler_started = threading.Event()
         handler_continue = threading.Event()
 
-        def slow_handler(task_type, payload):
+        def slow_handler(**kwargs):
             handler_started.set()
             handler_continue.wait(timeout=10)
 
@@ -269,7 +285,7 @@ class TestProcessTask:
         handler_started = threading.Event()
         handler_continue = threading.Event()
 
-        def slow_failing_handler(task_type, payload):
+        def slow_failing_handler(**kwargs):
             handler_started.set()
             handler_continue.wait(timeout=10)
             raise ValueError("fail after delete")
@@ -301,7 +317,7 @@ class TestProcessTask:
         handler_started = threading.Event()
         handler_continue = threading.Event()
 
-        def slow_handler(task_type, payload):
+        def slow_handler(**kwargs):
             handler_started.set()
             handler_continue.wait(timeout=10)
 
@@ -341,7 +357,7 @@ class TestProcessTask:
         handler_started = threading.Event()
         handler_continue = threading.Event()
 
-        def slow_failing_handler(task_type, payload):
+        def slow_failing_handler(**kwargs):
             handler_started.set()
             handler_continue.wait(timeout=10)
             raise ValueError("fail after kill")
@@ -371,3 +387,48 @@ class TestProcessTask:
             task = session.get(TaskEntryModel, task_id)
             # DEAD should be preserved, not overwritten with FAILED
             assert task.status == TaskStatus.DEAD.value
+
+
+class TestHandlerInvocation:
+    """Handlers are called as handler(*args, **kwargs) — plain Python functions."""
+
+    def test_positional_args_are_splatted(self, session):
+        task = create_task(session, task_type="report.build", args=[42, "monthly"])
+        session.commit()
+
+        seen = []
+
+        def handler(client_id, period):
+            seen.append((client_id, period))
+
+        assert process_task(session, task.id, handler) is True
+        assert seen == [(42, "monthly")]
+
+    def test_args_and_kwargs_are_splatted(self, session):
+        task = create_task(
+            session, task_type="report.build", args=[42], kwargs={"period": "monthly"}
+        )
+        session.commit()
+
+        seen = []
+
+        def handler(client_id, period="daily"):
+            seen.append((client_id, period))
+
+        assert process_task(session, task.id, handler) is True
+        assert seen == [(42, "monthly")]
+
+    def test_signature_mismatch_fails_the_task(self, session):
+        """A wrong argument list is an ordinary TypeError, recorded on the row."""
+        task = create_task(session, task_type="report.build", args=[42])
+        session.commit()
+
+        def handler(client_id, period):  # period has no default and no value supplied
+            raise AssertionError("should not be reached")
+
+        assert process_task(session, task.id, handler) is False
+
+        row = session.get(TaskEntryModel, task.id)
+        assert row is not None
+        assert row.status == TaskStatus.FAILED.value
+        assert "period" in row.error

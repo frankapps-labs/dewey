@@ -19,10 +19,6 @@ from dewey.core.logging import (
     update_trace_context,
 )
 from dewey.sqlalchemy.async_executor import create_task_async, process_task_async
-from dewey.sqlalchemy.async_notifications import (
-    create_notification_async,
-    send_notification_async,
-)
 from dewey.sqlalchemy.executor import create_task, process_task
 
 # ---------------------------------------------------------------------------
@@ -154,7 +150,7 @@ class TestSyncExecutorTrace:
     def test_handler_sees_trace_from_metadata(self, session):
         seen: dict[str, dict] = {}
 
-        def handler(task_type, payload):
+        def handler(**kwargs):
             seen["ctx"] = get_trace_context()
 
         task = create_task(session, task_type="t", metadata={"trace": {"request_id": "REQ-1"}})
@@ -168,7 +164,7 @@ class TestSyncExecutorTrace:
     def test_handler_no_trace_when_metadata_empty(self, session):
         seen: dict[str, dict] = {}
 
-        def handler(task_type, payload):
+        def handler(**kwargs):
             seen["ctx"] = get_trace_context()
 
         task = create_task(session, task_type="t")
@@ -178,7 +174,7 @@ class TestSyncExecutorTrace:
 
 
 # ---------------------------------------------------------------------------
-# Async executor + notification: trace restored
+# Async executor: trace restored
 # ---------------------------------------------------------------------------
 
 
@@ -187,7 +183,7 @@ class TestAsyncTrace:
     async def test_async_handler_sees_trace(self, async_session):
         seen: dict[str, dict] = {}
 
-        async def handler(task_type, payload):
+        async def handler(**kwargs):
             seen["ctx"] = get_trace_context()
 
         task = await create_task_async(
@@ -204,11 +200,11 @@ class TestAsyncTrace:
         # single-session test but interleaved via asyncio.gather and small sleeps).
         seen: dict[str, dict] = {}
 
-        async def handler_a(task_type, payload):
+        async def handler_a(**kwargs):
             await asyncio.sleep(0.05)
             seen["a"] = get_trace_context()
 
-        async def handler_b(task_type, payload):
+        async def handler_b(**kwargs):
             await asyncio.sleep(0.05)
             seen["b"] = get_trace_context()
 
@@ -242,7 +238,7 @@ class TestAsyncTrace:
             h.addFilter(f)
         try:
 
-            async def handler(task_type, payload):
+            async def handler(**kwargs):
                 return None  # success path → Phase 3b runs
 
             task = await create_task_async(
@@ -260,28 +256,3 @@ class TestAsyncTrace:
         assert completed, "expected a 'Task completed' log record"
         for r in completed:
             assert getattr(r, "dewey_request_id", None) == "REQ-PHASE3"
-
-    @pytest.mark.asyncio
-    async def test_send_notification_restores_trace(self, async_session):
-        seen: dict[str, dict] = {}
-
-        class CapturingChannel:
-            name = "cap"
-
-            def send(self, recipient, subject, body, payload):
-                from dewey.core.notifications import ChannelResult
-
-                seen["ctx"] = get_trace_context()
-                return ChannelResult(success=True)
-
-        notif = await create_notification_async(
-            async_session,
-            event_type="evt",
-            channel="cap",
-            recipient="x@y.z",
-            metadata={"trace": {"request_id": "REQ-N"}},
-        )
-        await async_session.commit()
-        await send_notification_async(async_session, notif.id, CapturingChannel())
-        assert seen["ctx"] == {"request_id": "REQ-N"}
-        assert get_trace_context() == {}

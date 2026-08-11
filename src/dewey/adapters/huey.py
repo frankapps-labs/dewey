@@ -1,4 +1,12 @@
-"""Huey adapter — enqueue tasks and register periodic sweep."""
+"""Huey adapter — transport only.
+
+Huey's job is to carry a task ID from the dispatcher to a worker. It does not
+decide when work runs, how often it retries, or what happens when it fails. That
+is Dewey's, in Postgres.
+
+Registering with ``retries=0`` is deliberate: two retry engines fighting over one
+task is how work gets run twice and how attempt counters stop meaning anything.
+"""
 
 from __future__ import annotations
 
@@ -11,101 +19,78 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+ProcessTaskFn = Callable[[str], Any]
+
 
 class HueyAdapter:
-    """
-    Adapter that bridges dewey to Huey.
+    """Bridge Dewey's dispatcher to a Huey worker pool.
 
-    Usage::
+    Put the wiring in a module both processes import — the Huey instance, the
+    adapter, and the ``register`` call::
 
-        from huey import RedisHuey
-        from dewey.adapters.huey import HueyAdapter
-
+        # myapp/tasks.py
         huey = RedisHuey("myapp")
         adapter = HueyAdapter(huey)
 
-        # Register the worker task + periodic sweep
-        adapter.setup(process_fn=my_process_function)
+        def _process(task_id: str) -> bool:
+            with Session(engine) as session:
+                return process_task(session, task_id)
 
-        # Then enqueue tasks:
-        adapter.enqueue(task_id="abc-123", queue="default")
+        adapter.register(_process)
 
-    The ``process_fn`` you provide receives a task_id (str) and should call
-    ``dewey.sqlalchemy.executor.process_task()`` with the appropriate
-    session and handler.
+    The worker runs ``huey_consumer myapp.tasks.huey``. The dispatcher imports the
+    same module and hands IDs over::
+
+        dispatcher = Dispatcher(SQLAlchemyDispatchBackend(engine), adapter.dispatch)
+        dispatcher.run()
+
+    Producers import none of this. They call ``create_task`` and commit.
     """
 
-    def __init__(self, huey: Huey) -> None:
+    def __init__(self, huey: Huey, *, task_name: str = "dewey_process_task") -> None:
         self._huey = huey
+        self._task_name = task_name
         self._process_task: Any = None
-        self._sweep_task: Any = None
 
-    def setup(
-        self,
-        process_fn: Callable[[str], Any],
-        sweep_fn: Callable[[], Any] | None = None,
-        sweep_interval_minutes: int = 5,
-        retries: int = 0,
-        retry_delay: int = 0,
-    ) -> None:
+    def register(self, process_fn: ProcessTaskFn) -> None:
+        """Register the callable that processes a task ID.
+
+        Call once per process, at import time, before the consumer starts.
+
+        ``retries=0`` is not an oversight: Dewey owns retry scheduling and the
+        attempt budget. A broker retrying underneath it would re-run a handler
+        Dewey had deliberately scheduled for later.
         """
-        Register Huey tasks for processing and sweeping.
+        if self._process_task is not None:
+            raise RuntimeError(
+                "HueyAdapter.register() was called twice in this process. Register once "
+                "at import time — a second call would bind two callables to the task "
+                f"name {self._task_name!r}."
+            )
 
-        Args:
-            process_fn: Called with task_id. Should open a session and call process_task().
-            sweep_fn: Called with no args. Should open a session and call sweep().
-                      If None, no periodic sweep is registered.
-            sweep_interval_minutes: How often to run the sweep (default: 5 min).
-            retries: Huey-level retries for the process task (default: 0, dewey handles retries).
-            retry_delay: Huey-level retry delay (default: 0).
-        """
-        from huey import crontab
-
-        @self._huey.task(retries=retries, retry_delay=retry_delay)
-        def _dewey_process(task_id: str) -> Any:
+        @self._huey.task(name=self._task_name, retries=0)
+        def _dewey_process_task(task_id: str) -> Any:
             return process_fn(task_id)
 
-        self._process_task = _dewey_process
+        self._process_task = _dewey_process_task
+        logger.info("HueyAdapter registered processor as %r", self._task_name)
 
-        if sweep_fn:
+    def dispatch(self, task_id: str) -> Any:
+        """Hand a claimed task ID to the Huey worker pool.
 
-            @self._huey.periodic_task(crontab(minute=f"*/{sweep_interval_minutes}"))
-            def _dewey_sweep() -> Any:
-                return sweep_fn()
+        Called only by the dispatcher, only after the claim is committed.
 
-            self._sweep_task = _dewey_sweep
-
-        logger.info(
-            "HueyAdapter setup complete sweep_interval=%dm",
-            sweep_interval_minutes,
-        )
-
-    def enqueue(self, task_id: str, queue: str = "default", priority: int = 0) -> Any:
-        """Enqueue a task ID for processing."""
+        Raising when the broker is unreachable is correct and expected: the
+        dispatcher returns the row to PENDING, backs off, and tries again. Nothing
+        is lost, because Postgres — not Redis — is holding the backlog.
+        """
         if self._process_task is None:
             raise RuntimeError(
-                "HueyAdapter.setup() must be called before enqueue(). "
-                "Register your process_fn first."
+                "HueyAdapter.register() must be called before dispatch(). Import the "
+                "module that wires the adapter (the same one your worker uses) in the "
+                "dispatcher process, so both agree on the task name."
             )
+        return self._process_task(task_id)
 
-        if queue != "default":
-            logger.debug(
-                "HueyAdapter: queue=%s is informational only — "
-                "Huey routes tasks via registration, not per-enqueue",
-                queue,
-            )
-        if priority != 0:
-            logger.debug(
-                "HueyAdapter: priority=%d is informational only — "
-                "use PriorityRedisHuey and configure priority at task registration level",
-                priority,
-            )
-        result = self._process_task(task_id)
-        logger.debug("Enqueued task_id=%s queue=%s priority=%d", task_id, queue, priority)
-        return result
 
-    def enqueue_sweep(self) -> Any:
-        """Manually trigger a sweep outside the periodic schedule."""
-        if self._sweep_task is None:
-            raise RuntimeError("No sweep_fn was registered in setup().")
-        return self._sweep_task()
+__all__ = ["HueyAdapter", "ProcessTaskFn"]

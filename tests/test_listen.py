@@ -6,7 +6,6 @@ import pytest
 
 from dewey.core.states import TaskStatus
 from dewey.sqlalchemy.async_executor import create_task_async
-from dewey.sqlalchemy.async_notifications import create_notification_async
 from dewey.sqlalchemy.async_queries import retry_task_async
 from dewey.sqlalchemy.async_sweep import sweep_failed_async
 from dewey.sqlalchemy.listen import AsyncPostgresWorkListener, notify_work_available_async
@@ -18,7 +17,7 @@ async def test_create_task_async_notifies_on_commit(async_engine, async_session)
         task = await create_task_async(
             async_session,
             task_type="scan",
-            payload={"url": "https://example.com"},
+            kwargs={"url": "https://example.com"},
             queue="critical",
         )
 
@@ -35,28 +34,10 @@ async def test_create_task_async_notifies_on_commit(async_engine, async_session)
 
 
 @pytest.mark.asyncio
-async def test_create_notification_async_notifies_on_commit(async_engine, async_session):
-    async with AsyncPostgresWorkListener(async_engine) as listener:
-        notification = await create_notification_async(
-            async_session,
-            event_type="order.confirmed",
-            channel="email",
-            recipient="user@example.com",
-        )
-        await async_session.commit()
-        notifications = await listener.wait(timeout=1.0)
-
-    assert notifications
-    assert notifications[0].kind == "notification"
-    assert notifications[0].id == notification.id
-    assert notifications[0].queue == "email"
-
-
-@pytest.mark.asyncio
 async def test_retry_task_async_notifies_on_commit(async_engine, async_session):
-    task = await create_task_async(async_session, task_type="scan", payload={})
+    task = await create_task_async(async_session, task_type="scan", kwargs={})
     task.status = TaskStatus.FAILED.value
-    task.process_after = datetime.now(UTC) - timedelta(seconds=1)
+    task.scheduled_for = datetime.now(UTC) - timedelta(seconds=1)
     await async_session.commit()
 
     async with AsyncPostgresWorkListener(async_engine) as listener:
@@ -72,9 +53,9 @@ async def test_retry_task_async_notifies_on_commit(async_engine, async_session):
 
 @pytest.mark.asyncio
 async def test_sweep_failed_async_notifies_on_commit(async_engine, async_session):
-    task = await create_task_async(async_session, task_type="scan", payload={})
+    task = await create_task_async(async_session, task_type="scan", kwargs={})
     task.status = TaskStatus.FAILED.value
-    task.process_after = datetime.now(UTC) - timedelta(seconds=1)
+    task.scheduled_for = datetime.now(UTC) - timedelta(seconds=1)
     await async_session.commit()
 
     async with AsyncPostgresWorkListener(async_engine) as listener:

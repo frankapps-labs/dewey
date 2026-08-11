@@ -2,7 +2,7 @@
 
 Dewey is a library, not a framework — it doesn't ship a logging config.
 Every Dewey log goes through a logger under the ``dewey.*`` namespace
-(``dewey.core``, ``dewey.sqlalchemy.executor``, ``dewey.django.notifications``,
+(``dewey.core``, ``dewey.sqlalchemy.executor``, ``dewey.django.executor``,
 etc.), so consumers can wire them up like any other library:
 
 .. code-block:: python
@@ -21,7 +21,7 @@ Trace context
 -------------
 
 Dewey doesn't know what a "trace ID" means — it just round-trips a small
-dict of correlation IDs from the task/notification creator, through the
+dict of correlation IDs from the task creator, through the
 ledger row's ``metadata["trace"]`` field, into the worker, and makes that
 dict available to every log record produced while the handler runs.
 
@@ -54,7 +54,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from typing import Any
 
-#: Key inside a task or notification's ``metadata`` dict used to carry
+#: Key inside a task's ``metadata`` dict used to carry
 #: the trace context across the worker boundary.
 TRACE_METADATA_KEY = "trace"
 
@@ -99,7 +99,7 @@ def bind_to_metadata(
     *,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build a ``metadata`` dict for ``create_task`` / ``create_notification``
+    """Build a ``metadata`` dict for ``create_task``
     that carries the current trace context.
 
     Merges, in order: ``metadata`` (caller-supplied), the current trace
@@ -137,7 +137,7 @@ def extract_trace_context(metadata: dict[str, Any] | None) -> dict[str, Any]:
 @contextmanager
 def restore_trace_context(metadata: dict[str, Any] | None) -> Iterator[dict[str, Any]]:
     """Context manager: temporarily set the trace context from a task or
-    notification's ``metadata`` blob, restoring the previous context on exit.
+    task's ``metadata`` blob, restoring the previous context on exit.
 
     Used by Dewey's ``process_*`` functions to make trace IDs that were
     captured at task-creation time available to logs produced inside the

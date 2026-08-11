@@ -9,7 +9,7 @@ from django.db.models import Count
 
 from dewey.core.states import TaskStatus
 from dewey.core.types import TaskEntry as TaskEntryDC
-from dewey.django.models import TaskEntry
+from dewey.django.models import TaskEntry, resolve_db_alias
 
 
 def _to_list(qs) -> list[TaskEntryDC]:
@@ -23,7 +23,9 @@ def get_stats() -> dict[str, int]:
     """
     Counts by status — the health overview.
 
-    Returns: {"pending": 12, "processing": 3, "completed": 4891, "failed": 2, "dead": 1}
+    Returns one count per status, including zeros:
+    ``{"pending": 12, "dispatching": 1, "processing": 3, "completed": 4891,
+    "failed": 2, "dead": 1}``
     """
     rows = TaskEntry.objects.values("status").annotate(count=Count("id")).order_by()
     stats = {s.value: 0 for s in TaskStatus}
@@ -51,6 +53,14 @@ def get_processing(limit: int = 50) -> list[TaskEntryDC]:
     qs = TaskEntry.objects.filter(
         status=TaskStatus.PROCESSING.value,
     ).order_by("started_at")
+    return _to_list(qs[:limit])
+
+
+def get_dispatching(limit: int = 50) -> list[TaskEntryDC]:
+    """Tasks claimed for dispatch but not yet started by a worker."""
+    qs = TaskEntry.objects.filter(
+        status=TaskStatus.DISPATCHING.value,
+    ).order_by("dispatching_at")
     return _to_list(qs[:limit])
 
 
@@ -114,23 +124,28 @@ def get_recent(
 # --- Actions ---
 
 
-@transaction.atomic
-def retry_task(task_id: str) -> TaskEntryDC | None:
-    """Reset a failed/dead task back to pending for re-processing."""
-    try:
-        task = TaskEntry.objects.select_for_update().get(id=task_id)
-    except TaskEntry.DoesNotExist:
-        return None
+def retry_task(task_id: str, using: str | None = None) -> TaskEntryDC | None:
+    """Reset a failed/dead task back to pending for re-processing.
 
-    if not TaskStatus(task.status).can_transition_to(TaskStatus.PENDING):
+    ``using`` pins the action to a database alias; when omitted, the project's
+    routers decide.
+    """
+    alias = resolve_db_alias(using)
+    with transaction.atomic(using=alias):
+        try:
+            task = TaskEntry.objects.using(alias).select_for_update().get(id=task_id)
+        except TaskEntry.DoesNotExist:
+            return None
+
+        if not TaskStatus(task.status).can_transition_to(TaskStatus.PENDING):
+            return task.to_dataclass()
+
+        task.status = TaskStatus.PENDING.value
+        task.scheduled_for = None
+        task.error = ""
+        task.attempts = 0
+        task.save(update_fields=["status", "scheduled_for", "error", "attempts", "updated_at"])
         return task.to_dataclass()
-
-    task.status = TaskStatus.PENDING.value
-    task.process_after = None
-    task.error = ""
-    task.attempts = 0
-    task.save(update_fields=["status", "process_after", "error", "attempts", "updated_at"])
-    return task.to_dataclass()
 
 
 def bulk_retry(
@@ -153,26 +168,31 @@ def bulk_retry(
         qs = qs.filter(task_type=task_type)
     return qs.update(
         status=TaskStatus.PENDING.value,
-        process_after=None,
+        scheduled_for=None,
         error="",
         attempts=0,
     )
 
 
-@transaction.atomic
-def kill_task(task_id: str) -> TaskEntryDC | None:
-    """Force a task to DEAD — stop retrying."""
-    try:
-        task = TaskEntry.objects.select_for_update().get(id=task_id)
-    except TaskEntry.DoesNotExist:
-        return None
+def kill_task(task_id: str, using: str | None = None) -> TaskEntryDC | None:
+    """Force a task to DEAD — stop retrying.
 
-    if not TaskStatus(task.status).can_transition_to(TaskStatus.DEAD):
+    ``using`` pins the action to a database alias; when omitted, the project's
+    routers decide.
+    """
+    alias = resolve_db_alias(using)
+    with transaction.atomic(using=alias):
+        try:
+            task = TaskEntry.objects.using(alias).select_for_update().get(id=task_id)
+        except TaskEntry.DoesNotExist:
+            return None
+
+        if not TaskStatus(task.status).can_transition_to(TaskStatus.DEAD):
+            return task.to_dataclass()
+
+        task.status = TaskStatus.DEAD.value
+        task.save(update_fields=["status", "updated_at"])
         return task.to_dataclass()
-
-    task.status = TaskStatus.DEAD.value
-    task.save(update_fields=["status", "updated_at"])
-    return task.to_dataclass()
 
 
 def purge_completed(
