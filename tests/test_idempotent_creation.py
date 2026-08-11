@@ -7,7 +7,7 @@ import asyncio
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 import django
 import pytest
@@ -71,6 +71,26 @@ class TestSQLAlchemyCreateOrGet:
         count = session.scalar(select(func.count()).select_from(TaskEntryModel))
         assert count == 1
 
+    def test_aware_schedule_is_stable_across_fresh_database_sessions(self, engine):
+        scheduled = datetime.now(timezone(timedelta(hours=5, minutes=30))) + timedelta(minutes=5)
+        with Session(engine) as first_session, first_session.begin():
+            first = create_or_get_task(
+                first_session,
+                task_type="report.build",
+                idempotency_key="report-aware-roundtrip",
+                scheduled_for=scheduled,
+            )
+            task_id = first.id
+
+        with Session(engine) as retry_session, retry_session.begin():
+            retry = create_or_get_task(
+                retry_session,
+                task_type="report.build",
+                idempotency_key="report-aware-roundtrip",
+                scheduled_for=scheduled,
+            )
+            assert retry.id == task_id
+
     def test_conflict_names_fields_without_values(self, session):
         create_or_get_task(
             session,
@@ -116,6 +136,16 @@ class TestSQLAlchemyCreateOrGet:
     def test_requires_a_non_empty_key(self, session):
         with pytest.raises(ValueError, match="non-empty"):
             create_or_get_task(session, task_type="report.build", idempotency_key="")
+
+    def test_rejects_a_naive_schedule_before_persistence(self, session):
+        with pytest.raises(ValueError, match="scheduled_for must be.*timezone-aware"):
+            create_or_get_task(
+                session,
+                task_type="report.build",
+                idempotency_key="report-naive-schedule",
+                scheduled_for=datetime.now(),
+            )
+        assert session.query(TaskEntryModel).count() == 0
 
     def test_concurrent_creators_converge_on_one_row(self, engine):
         """The unique constraint and savepoint make the race loser return the winner."""
@@ -173,6 +203,15 @@ class TestAsyncCreateOrGet:
                 kwargs={"page": 2},
             )
         assert excinfo.value.differing_fields == ("kwargs",)
+
+    async def test_rejects_a_naive_schedule(self, async_session):
+        with pytest.raises(ValueError, match="scheduled_for must be.*timezone-aware"):
+            await create_or_get_task_async(
+                async_session,
+                task_type="async.report",
+                idempotency_key="async-naive-schedule",
+                scheduled_for=datetime.now(),
+            )
 
     async def test_concurrent_creators_converge(self, async_engine):
         factory = async_sessionmaker(async_engine, expire_on_commit=False)
@@ -244,3 +283,11 @@ class TestDjangoCreateOrGet:
     def test_requires_a_non_empty_key(self):
         with pytest.raises(ValueError, match="non-empty"):
             django_create_or_get_task(task_type="django.report", idempotency_key="")
+
+    def test_rejects_a_naive_schedule(self):
+        with pytest.raises(ValueError, match="scheduled_for must be.*timezone-aware"):
+            django_create_or_get_task(
+                task_type="django.report",
+                idempotency_key="django-naive-schedule",
+                scheduled_for=datetime.now(),
+            )

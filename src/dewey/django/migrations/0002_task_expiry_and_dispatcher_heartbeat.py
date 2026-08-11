@@ -1,7 +1,16 @@
 # Dewey 0.5: task expiry fields, EXPIRED status, and dispatcher heartbeats.
-# Purely additive and reversible — no data migration, no field removal.
+# The forward schema change is additive. On rollback, 0.5-expired rows are mapped
+# to DEAD before the 0.4 status choices are restored.
 
 from django.db import migrations, models
+
+
+def restore_legacy_terminal_status(apps, schema_editor):
+    """Keep terminal 0.5 rows interpretable by the 0.4 runtime on downgrade."""
+    task_entry = apps.get_model("dewey", "TaskEntry")
+    task_entry.objects.using(schema_editor.connection.alias).filter(status="expired").update(
+        status="dead"
+    )
 
 
 class Migration(migrations.Migration):
@@ -64,6 +73,10 @@ class Migration(migrations.Migration):
                 default="pending",
                 max_length=20,
             ),
+        ),
+        migrations.RunPython(
+            code=migrations.RunPython.noop,
+            reverse_code=restore_legacy_terminal_status,
         ),
         migrations.AddIndex(
             model_name="taskentry",

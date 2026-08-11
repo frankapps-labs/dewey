@@ -78,14 +78,6 @@ class DispatchBackend(Protocol):
         """Run the recovery passes and return what each one touched."""
         ...
 
-    def next_due(self) -> datetime | None:
-        """Earliest scheduled work or deadline for this backend's queue scope."""
-        ...
-
-    def heartbeat(self) -> None:
-        """Persist this dispatcher's non-secret readiness identity."""
-        ...
-
     def wait_for_work(self, timeout: float) -> bool:
         """Block until notified or ``timeout`` elapses. True if notified."""
         ...
@@ -458,14 +450,6 @@ class AsyncDispatchBackend(Protocol):
 
     async def run_sweep(self) -> dict[str, list[str]]:
         """Run the recovery passes and return what each one touched."""
-        ...
-
-    async def next_due(self) -> datetime | None:
-        """Earliest scheduled work or deadline for this backend's queue scope."""
-        ...
-
-    async def heartbeat(self) -> None:
-        """Persist this dispatcher's non-secret readiness identity."""
         ...
 
     async def wait_for_work(self, timeout: float) -> bool:

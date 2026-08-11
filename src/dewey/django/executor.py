@@ -106,6 +106,8 @@ def create_or_get_task(
 
     if not idempotency_key:
         raise ValueError("create_or_get_task requires a non-empty idempotency_key")
+    if scheduled_for is not None and scheduled_for.utcoffset() is None:
+        raise ValueError("scheduled_for must be a timezone-aware datetime")
     if expires_at is not None and expires_at.utcoffset() is None:
         raise ValueError("expires_at must be a timezone-aware datetime")
     policy = resolve_policy(task_type)
@@ -198,7 +200,6 @@ def process_task(
 
     Returns True if the task was processed successfully.
     """
-    now = datetime.now(UTC)
     alias = resolve_db_alias(using)
 
     # Phase 1: Claim the task
@@ -209,6 +210,9 @@ def process_task(
             logger.warning("Task not found id=%s", task_id)
             return False
 
+        # The row lock can block past a deadline. All claim-time decisions must use
+        # the time observed after acquisition, not the time processing was requested.
+        now = datetime.now(UTC)
         current_status = TaskStatus(task.status)
 
         # Already processed or dead — skip

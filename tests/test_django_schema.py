@@ -2,7 +2,7 @@
 
 Covers the frozen P2 slice: expiry/snapshot fields and EXPIRED on TaskEntry,
 the dispatcher heartbeat table, and an additive, reversible migration 0002
-that matches the models exactly.
+that maps 0.5-only terminal data safely on rollback and matches the models exactly.
 """
 
 # ruff: noqa: E402 — django.setup() must run before model imports
@@ -54,12 +54,13 @@ class TestMigrationsShip:
 
 
 class TestMigration0002Shape:
-    def test_is_additive_only(self):
-        """0.4 rows must survive: no removals, deletions, or data rewrites."""
+    def test_forward_path_is_additive_only(self):
+        """The forward path has no removals; reverse-only repair makes downgrade safe."""
         allowed = (
             dj_migrations.CreateModel,
             dj_migrations.AddField,
             dj_migrations.AlterField,
+            dj_migrations.RunPython,
             dj_migrations.AddIndex,
         )
         for operation in _load_migration_0002().operations:
@@ -205,9 +206,16 @@ class TestDispatcherHeartbeatModelParity:
 class TestMigration0002Reversibility:
     """Prove 0002 applies backwards and forwards on real Postgres."""
 
-    def test_roundtrip_to_0001_and_back(self):
+    def test_roundtrip_to_0001_and_back_maps_expired_to_dead(self):
         from django.db import connection
         from django.db.migrations.executor import MigrationExecutor
+
+        expired_id = "rollback-expired-task"
+        TaskEntry.objects.create(
+            id=expired_id,
+            task_type="rollback.expired",
+            status=TaskStatus.EXPIRED.value,
+        )
 
         def task_columns():
             with connection.cursor() as cursor:
@@ -227,6 +235,9 @@ class TestMigration0002Reversibility:
             assert "initial_scheduled_for" not in columns
             assert "expired_at" not in columns
             assert "dewey_dispatcher_heartbeats" not in table_names()
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT status FROM task_entries WHERE id = %s", [expired_id])
+                assert cursor.fetchone() == (TaskStatus.DEAD.value,)
         finally:
             executor.loader.build_graph()
             executor.migrate([("dewey", MIGRATION_0002)])

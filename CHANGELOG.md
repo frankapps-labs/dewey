@@ -24,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Due `FAILED` rows are directly claimable and dispatchers pace wake-up to the earliest
   retry, scheduled task, or earlier deadline. Ordinary retry latency no longer depends on
   `SWEEP_INTERVAL_SECONDS`; sweeps remain crash-recovery backstops.
+- Task deadlines are evaluated using the time observed after the worker acquires the row
+  lock, so lock contention cannot let already-expired work start. Idempotent creation now
+  requires timezone-aware `scheduled_for` values for stable database round trips.
 - Django database guidance now separates producer, dispatcher, and worker roles. Producer
   task creation must share the business transaction's alias; two aliases to one PostgreSQL
   database are two connections and transactions.
@@ -33,10 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Compatibility
 - `create_task()` remains compatible, including raw duplicate-key integrity errors.
 - Existing rows receive nullable deadline/snapshot fields and never expire. Status consumers
-  must accept `expired`. SQLAlchemy deployments need an Alembic/additive-DDL upgrade because
+  must accept `expired`. Reversing the Django migration maps 0.5-only `expired` rows to
+  0.4-compatible `dead`. SQLAlchemy deployments need an Alembic/additive-DDL upgrade because
   `metadata.create_all()` does not alter existing tables.
-- Custom dispatch backends should implement `next_due()` and `heartbeat()`; the dispatcher
-  retains safe fallback behavior while migrating custom 0.x integrations.
+- Custom dispatch backends may implement `next_due()` and `heartbeat()` for improved pacing
+  and readiness. These optional capabilities are not part of the runtime-checkable base
+  protocol, and the dispatcher retains safe fallback behavior when they are absent.
 
 ## [0.4.0] - 2026-08-06
 

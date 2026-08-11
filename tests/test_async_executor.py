@@ -217,6 +217,42 @@ async def test_process_task_respects_scheduled_for(async_session):
 
 
 @pytest.mark.asyncio
+async def test_deadline_is_checked_after_the_task_lock_is_acquired(async_session, monkeypatch):
+    import dewey.sqlalchemy.async_executor as executor_module
+
+    before = datetime.now(UTC)
+    deadline = before + timedelta(minutes=1)
+    after = deadline + timedelta(seconds=1)
+    task = await create_task_async(async_session, task_type="deadline", expires_at=deadline)
+    await async_session.commit()
+
+    observed = [before]
+
+    class LockAwareClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return observed[0]
+
+    real_execute = async_session.execute
+
+    async def execute_after_wait(*args, **kwargs):
+        observed[0] = after
+        return await real_execute(*args, **kwargs)
+
+    monkeypatch.setattr(executor_module, "datetime", LockAwareClock)
+    monkeypatch.setattr(async_session, "execute", execute_after_wait)
+    runs = []
+
+    async def handler():
+        runs.append(1)
+
+    assert await process_task_async(async_session, task.id, handler) is False
+    assert runs == []
+    row = await async_session.get(TaskEntryModel, task.id)
+    assert row.status == TaskStatus.EXPIRED.value
+
+
+@pytest.mark.asyncio
 async def test_expiry_creation_and_delivery(async_session):
     scheduled = datetime.now(UTC) + timedelta(minutes=5)
     expires = scheduled + timedelta(minutes=10)

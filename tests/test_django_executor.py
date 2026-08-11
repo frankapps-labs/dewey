@@ -4,7 +4,7 @@
 
 import os
 import time
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import django
 import pytest
@@ -351,6 +351,37 @@ class TestProcessTask:
 
 @pytest.mark.django_db(transaction=True)
 class TestExpiry:
+    def test_deadline_is_checked_after_the_task_lock_is_acquired(self, monkeypatch):
+        from django.db.models.query import QuerySet
+
+        import dewey.django.executor as executor_module
+        from dewey.django.models import TaskEntry
+
+        before = datetime.now(UTC)
+        deadline = before + timedelta(minutes=1)
+        after = deadline + timedelta(seconds=1)
+        task = create_task(task_type="deadline", expires_at=deadline)
+        observed = [before]
+
+        class LockAwareClock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return observed[0]
+
+        real_get = QuerySet.get
+
+        def get_after_wait(self, *args, **kwargs):
+            observed[0] = after
+            return real_get(self, *args, **kwargs)
+
+        monkeypatch.setattr(executor_module, "datetime", LockAwareClock)
+        monkeypatch.setattr(QuerySet, "get", get_after_wait)
+        runs = []
+
+        assert process_task(task.id, lambda: runs.append(1)) is False
+        assert runs == []
+        assert TaskEntry.objects.get(id=task.id).status == TaskStatus.EXPIRED.value
+
     def test_creation_persists_deadline_and_original_schedule(self):
         scheduled = timezone.now() + timedelta(minutes=5)
         expires = scheduled + timedelta(minutes=10)

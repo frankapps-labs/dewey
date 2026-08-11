@@ -105,6 +105,8 @@ def create_or_get_task(
 
     if not idempotency_key:
         raise ValueError("create_or_get_task requires a non-empty idempotency_key")
+    if scheduled_for is not None and scheduled_for.utcoffset() is None:
+        raise ValueError("scheduled_for must be a timezone-aware datetime")
     if expires_at is not None and expires_at.utcoffset() is None:
         raise ValueError("expires_at must be a timezone-aware datetime")
     policy = resolve_policy(task_type)
@@ -193,8 +195,6 @@ def process_task(
 
     Returns True if the task was processed successfully.
     """
-    now = datetime.now(UTC)
-
     # Phase 1: Claim the task
     stmt = select(TaskEntryModel).where(TaskEntryModel.id == task_id).with_for_update()
     task = session.execute(stmt).scalar_one_or_none()
@@ -203,6 +203,9 @@ def process_task(
         logger.warning("Task not found id=%s", task_id)
         return False
 
+    # SELECT FOR UPDATE may have waited past the deadline. Observe time only after
+    # the row is ours so expiry, scheduling, and started_at share a fresh instant.
+    now = datetime.now(UTC)
     current_status = TaskStatus(task.status)
 
     # Already processed or dead — skip
