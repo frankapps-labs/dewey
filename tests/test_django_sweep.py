@@ -16,7 +16,7 @@ from django.utils import timezone
 from dewey.core.states import TaskStatus
 from dewey.django.executor import create_task
 from dewey.django.models import TaskEntry
-from dewey.django.sweep import sweep, sweep_failed, sweep_stuck
+from dewey.django.sweep import sweep, sweep_expired, sweep_failed, sweep_stuck
 
 
 @pytest.fixture(autouse=True)
@@ -134,3 +134,22 @@ class TestSweepCombined:
         result = sweep()
         assert failed.id in result["failed"]
         assert stuck.id in result["stuck"]
+
+
+@pytest.mark.django_db(transaction=True)
+class TestSweepExpired:
+    def test_expires_waiting_rows_but_not_processing(self):
+        waiting = create_task(task_type="deadline")
+        processing = create_task(task_type="deadline")
+        deadline = timezone.now() - timedelta(seconds=1)
+        TaskEntry.objects.filter(id=waiting.id).update(expires_at=deadline)
+        TaskEntry.objects.filter(id=processing.id).update(
+            expires_at=deadline,
+            status=TaskStatus.PROCESSING.value,
+        )
+
+        assert sweep_expired() == [waiting.id]
+        waiting_row = TaskEntry.objects.get(id=waiting.id)
+        assert waiting_row.status == TaskStatus.EXPIRED.value
+        assert waiting_row.expired_at is not None
+        assert TaskEntry.objects.get(id=processing.id).status == TaskStatus.PROCESSING.value

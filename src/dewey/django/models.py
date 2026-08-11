@@ -124,7 +124,7 @@ class TaskEntry(models.Model):
                 name="ix_task_expires",
                 condition=models.Q(
                     expires_at__isnull=False,
-                    status__in=["pending", "dispatching", "processing", "failed"],
+                    status__in=["pending", "dispatching", "failed"],
                 ),
             ),
             # Composite: recent tasks by type

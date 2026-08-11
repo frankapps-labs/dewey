@@ -70,7 +70,7 @@ class Migration(migrations.Migration):
             index=models.Index(
                 condition=models.Q(
                     ("expires_at__isnull", False),
-                    ("status__in", ["pending", "dispatching", "processing", "failed"]),
+                    ("status__in", ["pending", "dispatching", "failed"]),
                 ),
                 fields=["expires_at"],
                 name="ix_task_expires",

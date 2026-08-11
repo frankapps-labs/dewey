@@ -35,6 +35,9 @@ def _to_dataclass(row: TaskEntryModel) -> TaskEntry:
         completed_at=row.completed_at,
         idempotency_key=row.idempotency_key,
         metadata=row.task_metadata,
+        expires_at=row.expires_at,
+        initial_scheduled_for=row.initial_scheduled_for,
+        expired_at=row.expired_at,
     )
 
 
@@ -142,6 +145,19 @@ def get_dead(
     return _to_list(session.execute(stmt).scalars().all())
 
 
+def get_expired(
+    session: Session,
+    limit: int = 50,
+    task_type: str | None = None,
+) -> list[TaskEntry]:
+    """Tasks that reached their start deadline without running."""
+    stmt = select(TaskEntryModel).where(TaskEntryModel.status == TaskStatus.EXPIRED.value)
+    if task_type:
+        stmt = stmt.where(TaskEntryModel.task_type == task_type)
+    stmt = stmt.order_by(TaskEntryModel.expired_at.desc()).limit(limit)
+    return _to_list(session.execute(stmt).scalars().all())
+
+
 def get_task(session: Session, task_id: str) -> TaskEntry | None:
     """Single task by ID — for detail views."""
     stmt = select(TaskEntryModel).where(TaskEntryModel.id == task_id)
@@ -179,6 +195,8 @@ def retry_task(session: Session, task_id: str) -> TaskEntry | None:
         return None
 
     status = TaskStatus(task.status)
+    if status == TaskStatus.EXPIRED:
+        return None
     if not status.can_transition_to(TaskStatus.PENDING):
         return _to_dataclass(task)
 

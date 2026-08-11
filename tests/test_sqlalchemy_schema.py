@@ -40,10 +40,10 @@ class TestTaskEntryExpiryColumns:
 
         where = _compiled_where(index)
         assert "expires_at IS NOT NULL" in where
-        for candidate in ("pending", "dispatching", "processing", "failed"):
+        for candidate in ("pending", "dispatching", "failed"):
             assert candidate in where
-        # Terminal rows can never expire and must stay out of the index.
-        for terminal in ("completed", "dead", "expired"):
+        # Terminal rows and active handlers must stay out of the index.
+        for terminal in ("processing", "completed", "dead", "expired"):
             assert terminal not in where
 
 

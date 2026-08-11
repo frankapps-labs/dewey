@@ -32,6 +32,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,10 @@ class DispatchBackend(Protocol):
 
     def run_sweep(self) -> dict[str, list[str]]:
         """Run the recovery passes and return what each one touched."""
+        ...
+
+    def next_due(self) -> datetime | None:
+        """Earliest scheduled work or deadline for this backend's queue scope."""
         ...
 
     def wait_for_work(self, timeout: float) -> bool:
@@ -151,6 +156,18 @@ def _log_sweep(result: dict[str, list[str]]) -> None:
         logger.info("Sweep recovered %s", touched)
 
 
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+def _bounded_wait(idle_poll_seconds: float, due_at: datetime | None, now: datetime) -> float:
+    if due_at is None:
+        return idle_poll_seconds
+    if due_at.tzinfo is None:
+        due_at = due_at.replace(tzinfo=UTC)
+    return min(idle_poll_seconds, max(0.0, (due_at - now).total_seconds()))
+
+
 class Dispatcher:
     """Claim ready work from Postgres and hand task IDs to a transport.
 
@@ -178,6 +195,7 @@ class Dispatcher:
         dispatch_retry_cap_seconds: float = DEFAULT_DISPATCH_RETRY_CAP_SECONDS,
         database_retry_cap_seconds: float = DEFAULT_DATABASE_RETRY_CAP_SECONDS,
         monotonic: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], datetime] = _utcnow,
     ) -> None:
         if batch_size < 1:
             raise ValueError(f"batch_size must be >= 1, got {batch_size!r}")
@@ -195,6 +213,7 @@ class Dispatcher:
             "Database", dispatch_retry_base_seconds, database_retry_cap_seconds, monotonic
         )
         self._sweep_clock = _SweepClock(sweep_interval_seconds, monotonic)
+        self._wall_clock = wall_clock
         self._stop = threading.Event()
         # Claims we could not return to PENDING because the database was unreachable.
         # Retried every iteration: the dispatch-timeout sweep is the backstop for a
@@ -259,7 +278,8 @@ class Dispatcher:
         racing a thread.
         """
         logger.info(
-            "Dewey dispatcher starting (batch_size=%d idle_poll=%.1fs sweep=%s)",
+            "Dewey dispatcher starting (batch_size=%d idle_poll=%.1fs recovery_sweep=%s "
+            "retry_scheduling=direct)",
             self.batch_size,
             self.idle_poll_seconds,
             f"{self.sweep_interval_seconds}s" if self.sweep_interval_seconds else "disabled",
@@ -272,6 +292,7 @@ class Dispatcher:
                 iterations += 1
 
                 release_ready = self._retry_pending_release()
+                wait_timeout = self.idle_poll_seconds
                 try:
                     # The sweep runs even while a stranded release pauses claiming:
                     # it is recovery, and a broken release path must not also stop
@@ -285,6 +306,10 @@ class Dispatcher:
                         dispatched = 0
                     else:
                         dispatched = self.dispatch_batch()
+                    next_due = getattr(self.backend, "next_due", lambda: None)()
+                    wait_timeout = _bounded_wait(
+                        self.idle_poll_seconds, next_due, self._wall_clock()
+                    )
                 except Exception:
                     # Almost always the database going away underneath us. A
                     # dispatcher that exits here is worse than useless: claimed work
@@ -312,7 +337,7 @@ class Dispatcher:
                 if dispatched >= self.batch_size:
                     # A full batch usually means more is waiting; skip the wait.
                     continue
-                self.backend.wait_for_work(self.idle_poll_seconds)
+                self.backend.wait_for_work(wait_timeout)
         finally:
             logger.info("Dewey dispatcher stopped after %d iteration(s)", iterations)
             self.backend.close()
@@ -400,6 +425,10 @@ class AsyncDispatchBackend(Protocol):
         """Run the recovery passes and return what each one touched."""
         ...
 
+    async def next_due(self) -> datetime | None:
+        """Earliest scheduled work or deadline for this backend's queue scope."""
+        ...
+
     async def wait_for_work(self, timeout: float) -> bool:
         """Wait until notified or ``timeout`` elapses. True if notified."""
         ...
@@ -438,6 +467,7 @@ class AsyncDispatcher:
         dispatch_retry_cap_seconds: float = DEFAULT_DISPATCH_RETRY_CAP_SECONDS,
         database_retry_cap_seconds: float = DEFAULT_DATABASE_RETRY_CAP_SECONDS,
         monotonic: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], datetime] = _utcnow,
     ) -> None:
         if batch_size < 1:
             raise ValueError(f"batch_size must be >= 1, got {batch_size!r}")
@@ -454,6 +484,7 @@ class AsyncDispatcher:
             "Database", dispatch_retry_base_seconds, database_retry_cap_seconds, monotonic
         )
         self._sweep_clock = _SweepClock(sweep_interval_seconds, monotonic)
+        self._wall_clock = wall_clock
         self._stop = asyncio.Event()
         # See the sync dispatcher: stranded claims are retried, not left to the sweep.
         self._pending_release: list[str] = []
@@ -507,7 +538,8 @@ class AsyncDispatcher:
     async def run(self, *, max_iterations: int | None = None) -> None:
         """Dispatch until :meth:`stop` is called, or the task is cancelled."""
         logger.info(
-            "Dewey async dispatcher starting (batch_size=%d idle_poll=%.1fs sweep=%s)",
+            "Dewey async dispatcher starting (batch_size=%d idle_poll=%.1fs "
+            "recovery_sweep=%s retry_scheduling=direct)",
             self.batch_size,
             self.idle_poll_seconds,
             f"{self.sweep_interval_seconds}s" if self.sweep_interval_seconds else "disabled",
@@ -520,6 +552,7 @@ class AsyncDispatcher:
                 iterations += 1
 
                 release_ready = await self._retry_pending_release()
+                wait_timeout = self.idle_poll_seconds
                 try:
                     # Match the sync loop: the sweep runs even while a stranded
                     # release pauses claiming, because recovery must not stop with it.
@@ -530,6 +563,11 @@ class AsyncDispatcher:
                         dispatched = 0
                     else:
                         dispatched = await self.dispatch_batch()
+                    next_due_fn = getattr(self.backend, "next_due", None)
+                    next_due = await next_due_fn() if next_due_fn is not None else None
+                    wait_timeout = _bounded_wait(
+                        self.idle_poll_seconds, next_due, self._wall_clock()
+                    )
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -554,7 +592,7 @@ class AsyncDispatcher:
                     continue
                 if dispatched >= self.batch_size:
                     continue
-                await self.backend.wait_for_work(self.idle_poll_seconds)
+                await self.backend.wait_for_work(wait_timeout)
         except asyncio.CancelledError:
             logger.info("Dewey async dispatcher cancelled")
             raise

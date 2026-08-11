@@ -17,6 +17,7 @@ _LAZY: dict[str, str] = {
     "sweep_failed": "dewey.django.sweep",
     "sweep_stuck": "dewey.django.sweep",
     "sweep_dispatching": "dewey.django.sweep",
+    "sweep_expired": "dewey.django.sweep",
     # Queries and actions
     "get_stats": "dewey.django.queries",
     "get_pending": "dewey.django.queries",
@@ -25,6 +26,7 @@ _LAZY: dict[str, str] = {
     "get_stuck": "dewey.django.queries",
     "get_failed": "dewey.django.queries",
     "get_dead": "dewey.django.queries",
+    "get_expired": "dewey.django.queries",
     "get_task": "dewey.django.queries",
     "get_recent": "dewey.django.queries",
     "retry_task": "dewey.django.queries",
@@ -48,6 +50,9 @@ if TYPE_CHECKING:  # re-exported for type checkers and IDE completion
     )
     from dewey.django.queries import (
         get_dispatching as get_dispatching,
+    )
+    from dewey.django.queries import (
+        get_expired as get_expired,
     )
     from dewey.django.queries import (
         get_failed as get_failed,
@@ -86,6 +91,9 @@ if TYPE_CHECKING:  # re-exported for type checkers and IDE completion
         sweep_dispatching as sweep_dispatching,
     )
     from dewey.django.sweep import (
+        sweep_expired as sweep_expired,
+    )
+    from dewey.django.sweep import (
         sweep_failed as sweep_failed,
     )
     from dewey.django.sweep import (
@@ -97,6 +105,7 @@ __all__ = [
     "create_task",
     "get_dead",
     "get_dispatching",
+    "get_expired",
     "get_failed",
     "get_pending",
     "get_processing",
@@ -110,6 +119,7 @@ __all__ = [
     "retry_task",
     "sweep",
     "sweep_dispatching",
+    "sweep_expired",
     "sweep_failed",
     "sweep_stuck",
 ]

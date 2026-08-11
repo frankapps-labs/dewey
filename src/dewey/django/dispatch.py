@@ -6,6 +6,7 @@ import logging
 import time
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from typing import cast
 
 from django.db import connection, connections, models, transaction
 from django.db.models.functions import Coalesce
@@ -56,37 +57,76 @@ class DjangoDispatchBackend:
     # --- claim / release ---
 
     def claim(self, limit: int) -> list[str]:
-        """Move up to ``limit`` ready rows to DISPATCHING, committed before return.
-
-        Ordering is highest ``priority`` first, then by effective due time —
-        ``scheduled_for`` if set, else ``created_at`` — then oldest first.
-        Immediate and due scheduled work share one line, so a steady stream of
-        fresh tasks cannot starve a retry that has been due for minutes.
-        ``select_for_update(skip_locked=True)`` is what lets several dispatchers
-        run without double-claiming.
-        """
+        """Atomically expire deadlines and claim due PENDING or retryable FAILED rows."""
         now = datetime.now(UTC)
+        due = models.Q(scheduled_for__isnull=True) | models.Q(scheduled_for__lte=now)
+        claimable = cast(
+            models.Q,
+            (models.Q(status=TaskStatus.PENDING.value) & due)
+            | models.Q(  # pyright: ignore[reportOperatorIssue]
+                status=TaskStatus.FAILED.value,
+                scheduled_for__lte=now,
+                attempts__lt=models.F("max_attempts"),
+            ),
+        )
         with transaction.atomic(using=self.using):
-            queryset = (
+            expired = (
                 TaskEntry.objects.using(self.using)
                 .select_for_update(skip_locked=True)
                 .filter(
-                    models.Q(scheduled_for__isnull=True) | models.Q(scheduled_for__lte=now),
-                    status=TaskStatus.PENDING.value,
+                    status__in=[TaskStatus.PENDING.value, TaskStatus.FAILED.value],
+                    expires_at__isnull=False,
+                    expires_at__lte=now,
                 )
+            )
+            if self.queues is not None:
+                expired = expired.filter(queue__in=self.queues)
+            expired_ids = list(expired.values_list("id", flat=True)[:limit])
+            if expired_ids:
+                TaskEntry.objects.using(self.using).filter(id__in=expired_ids).update(
+                    status=TaskStatus.EXPIRED.value,
+                    expired_at=now,
+                    dispatching_at=None,
+                )
+
+            queryset = (
+                TaskEntry.objects.using(self.using)
+                .select_for_update(skip_locked=True)
+                .filter(claimable)
+                .filter(models.Q(expires_at__isnull=True) | models.Q(expires_at__gt=now))
                 .order_by("-priority", Coalesce("scheduled_for", "created_at").asc(), "created_at")
             )
             if self.queues is not None:
                 queryset = queryset.filter(queue__in=self.queues)
-
             task_ids = list(queryset.values_list("id", flat=True)[:limit])
             if not task_ids:
                 return []
-
             TaskEntry.objects.using(self.using).filter(
-                id__in=task_ids, status=TaskStatus.PENDING.value
+                id__in=task_ids,
+                status__in=[TaskStatus.PENDING.value, TaskStatus.FAILED.value],
             ).update(status=TaskStatus.DISPATCHING.value, dispatching_at=now)
         return task_ids
+
+    def next_due(self) -> datetime | None:
+        """Earliest future schedule or deadline in this dispatcher's queue scope."""
+        now = datetime.now(UTC)
+        queryset = TaskEntry.objects.using(self.using).filter(
+            models.Q(status=TaskStatus.PENDING.value)
+            | models.Q(
+                status=TaskStatus.FAILED.value,
+                attempts__lt=models.F("max_attempts"),
+            ),
+            scheduled_for__isnull=False,
+        )
+        if self.queues is not None:
+            queryset = queryset.filter(queue__in=self.queues)
+        wake_at = models.Case(
+            models.When(expires_at__lt=models.F("scheduled_for"), then=models.F("expires_at")),
+            default=models.F("scheduled_for"),
+            output_field=models.DateTimeField(),
+        )
+        due_at = queryset.aggregate(due=models.Min(wake_at))["due"]
+        return due_at if due_at is None or due_at >= now else now
 
     def release(self, task_ids: Sequence[str]) -> None:
         """Return claimed rows to PENDING, leaving the attempt count untouched."""

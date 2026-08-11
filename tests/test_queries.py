@@ -12,6 +12,7 @@ from dewey.sqlalchemy.models import TaskEntryModel
 from dewey.sqlalchemy.queries import (
     bulk_retry,
     get_dead,
+    get_expired,
     get_failed,
     get_pending,
     get_processing,
@@ -130,6 +131,20 @@ class TestGetDead:
         assert results[0].status == TaskStatus.DEAD
 
 
+class TestGetExpired:
+    def test_returns_expired_tasks_with_audit_fields(self, session):
+        task = create_task(session, task_type="deadline")
+        task.status = TaskStatus.EXPIRED.value
+        task.expires_at = datetime.now(UTC) - timedelta(seconds=2)
+        task.expired_at = datetime.now(UTC) - timedelta(seconds=1)
+        session.flush()
+
+        [result] = get_expired(session)
+        assert result.status == TaskStatus.EXPIRED
+        assert result.expires_at == task.expires_at
+        assert result.expired_at == task.expired_at
+
+
 class TestGetTask:
     def test_returns_task(self, session):
         task = create_task(session, task_type="test.task", kwargs={"x": 1})
@@ -210,6 +225,14 @@ class TestRetryTask:
         result = retry_task(session, task.id)
         assert result is not None
         assert result.status == TaskStatus.PENDING
+
+    def test_retry_expired_is_refused(self, session):
+        task = create_task(session, task_type="deadline")
+        task.status = TaskStatus.EXPIRED.value
+        session.flush()
+
+        assert retry_task(session, task.id) is None
+        assert task.status == TaskStatus.EXPIRED.value
 
     def test_retry_completed_noop(self, session):
         """Can't retry a completed task — no transition COMPLETED → PENDING."""

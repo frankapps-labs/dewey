@@ -35,7 +35,6 @@ def utcnow() -> datetime:
 _EXPIRY_CANDIDATE_STATUSES = (
     TaskStatus.PENDING.value,
     TaskStatus.DISPATCHING.value,
-    TaskStatus.PROCESSING.value,
     TaskStatus.FAILED.value,
 )
 

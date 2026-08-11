@@ -132,7 +132,7 @@ class TestTaskEntryModelParity:
         assert index.fields == ["expires_at"]
         children = dict(index.condition.children)
         assert children["expires_at__isnull"] is False
-        assert set(children["status__in"]) == {"pending", "dispatching", "processing", "failed"}
+        assert set(children["status__in"]) == {"pending", "dispatching", "failed"}
 
     def test_columns_match_the_sqlalchemy_table(self):
         django_columns = {f.column for f in TaskEntry._meta.concrete_fields}

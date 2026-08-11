@@ -7,7 +7,7 @@ import logging
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 
-from sqlalchemy import Engine, func, or_, select, update
+from sqlalchemy import Engine, and_, case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -72,63 +72,109 @@ class SQLAlchemyDispatchBackend:
     # --- claim / release ---
 
     def claim(self, limit: int) -> list[str]:
-        """Move up to ``limit`` ready rows to DISPATCHING, committed before return.
-
-        Ready means PENDING and due: either unscheduled, or ``scheduled_for`` has
-        passed. Ordering is highest ``priority`` first, then by effective due time
-        — ``coalesce(scheduled_for, created_at)`` — then oldest first. Sorting
-        NULL ``scheduled_for`` ahead of everything instead would let a sustained
-        stream of immediate work starve due scheduled and retried rows forever.
-        """
+        """Atomically expire deadlines and claim due PENDING or retryable FAILED rows."""
         now = datetime.now(UTC)
-        effective_due = func.coalesce(TaskEntryModel.scheduled_for, TaskEntryModel.created_at)
-        candidates = (
-            select(TaskEntryModel.id)
-            .where(
-                TaskEntryModel.status == TaskStatus.PENDING.value,
-                or_(
-                    TaskEntryModel.scheduled_for.is_(None),
-                    TaskEntryModel.scheduled_for <= now,
-                ),
-            )
-            .order_by(
-                TaskEntryModel.priority.desc(),
-                effective_due.asc(),
-                TaskEntryModel.created_at.asc(),
-            )
-            .limit(limit)
+        due = or_(TaskEntryModel.scheduled_for.is_(None), TaskEntryModel.scheduled_for <= now)
+        claimable = or_(
+            and_(TaskEntryModel.status == TaskStatus.PENDING.value, due),
+            and_(
+                TaskEntryModel.status == TaskStatus.FAILED.value,
+                TaskEntryModel.scheduled_for <= now,
+                TaskEntryModel.attempts < TaskEntryModel.max_attempts,
+            ),
         )
-        if self.queues is not None:
-            candidates = candidates.where(TaskEntryModel.queue.in_(self.queues))
-        if self._supports_skip_locked:
-            candidates = candidates.with_for_update(skip_locked=True)
+        effective_due = func.coalesce(TaskEntryModel.scheduled_for, TaskEntryModel.created_at)
 
-        # Lock first, then update the locked IDs. Folding this into one
-        # `UPDATE ... WHERE id IN (SELECT ... LIMIT n FOR UPDATE SKIP LOCKED)` looks
-        # tidier and is wrong: Postgres may run that subquery once per candidate row,
-        # and every row then finds itself in its own execution's result — the claim
-        # silently takes the whole table instead of one batch.
         with self._session_factory() as session:
-            task_ids = list(session.execute(candidates).scalars().all())
+            expired = select(TaskEntryModel.id).where(
+                TaskEntryModel.status.in_([TaskStatus.PENDING.value, TaskStatus.FAILED.value]),
+                TaskEntryModel.expires_at.is_not(None),
+                TaskEntryModel.expires_at <= now,
+            )
+            if self.queues is not None:
+                expired = expired.where(TaskEntryModel.queue.in_(self.queues))
+            if self._supports_skip_locked:
+                expired = expired.with_for_update(skip_locked=True)
+            expired_ids = list(session.execute(expired.limit(limit)).scalars())
+            if expired_ids:
+                session.execute(
+                    update(TaskEntryModel)
+                    .where(TaskEntryModel.id.in_(expired_ids))
+                    .values(
+                        status=TaskStatus.EXPIRED.value,
+                        expired_at=now,
+                        dispatching_at=None,
+                    )
+                )
+
+            candidates = (
+                select(TaskEntryModel.id)
+                .where(
+                    claimable,
+                    or_(TaskEntryModel.expires_at.is_(None), TaskEntryModel.expires_at > now),
+                )
+                .order_by(
+                    TaskEntryModel.priority.desc(),
+                    effective_due.asc(),
+                    TaskEntryModel.created_at.asc(),
+                )
+                .limit(limit)
+            )
+            if self.queues is not None:
+                candidates = candidates.where(TaskEntryModel.queue.in_(self.queues))
+            if self._supports_skip_locked:
+                candidates = candidates.with_for_update(skip_locked=True)
+            task_ids = list(session.execute(candidates).scalars())
             if not task_ids:
-                session.rollback()
+                session.commit()
                 return []
-            claimed = list(
+            claimed = set(
                 session.execute(
                     update(TaskEntryModel)
                     .where(
                         TaskEntryModel.id.in_(task_ids),
-                        TaskEntryModel.status == TaskStatus.PENDING.value,
+                        TaskEntryModel.status.in_(
+                            [TaskStatus.PENDING.value, TaskStatus.FAILED.value]
+                        ),
                     )
                     .values(status=TaskStatus.DISPATCHING.value, dispatching_at=now)
                     .returning(TaskEntryModel.id)
                 ).scalars()
             )
             session.commit()
-        # Preserve claim order: RETURNING order is not guaranteed, and the dispatcher
-        # should hand out the highest-priority work first.
-        claimed_set = set(claimed)
-        return [task_id for task_id in task_ids if task_id in claimed_set]
+        return [task_id for task_id in task_ids if task_id in claimed]
+
+    def next_due(self) -> datetime | None:
+        """Earliest future schedule or deadline in this dispatcher's queue scope."""
+        now = datetime.now(UTC)
+        wake_at = case(
+            (
+                and_(
+                    TaskEntryModel.expires_at.is_not(None),
+                    TaskEntryModel.expires_at < TaskEntryModel.scheduled_for,
+                ),
+                TaskEntryModel.expires_at,
+            ),
+            else_=TaskEntryModel.scheduled_for,
+        )
+        stmt = select(func.min(wake_at)).where(
+            TaskEntryModel.scheduled_for.is_not(None),
+            or_(
+                TaskEntryModel.status == TaskStatus.PENDING.value,
+                and_(
+                    TaskEntryModel.status == TaskStatus.FAILED.value,
+                    TaskEntryModel.attempts < TaskEntryModel.max_attempts,
+                ),
+            ),
+        )
+        if self.queues is not None:
+            stmt = stmt.where(TaskEntryModel.queue.in_(self.queues))
+        with self._session_factory() as session:
+            due_at = session.execute(stmt).scalar_one_or_none()
+            session.rollback()
+        if due_at is not None and due_at.tzinfo is None:
+            due_at = due_at.replace(tzinfo=UTC)
+        return due_at if due_at is None or due_at >= now else now
 
     def release(self, task_ids: Sequence[str]) -> None:
         """Return claimed rows to PENDING, leaving the attempt count untouched."""
@@ -250,48 +296,69 @@ class AsyncSQLAlchemyDispatchBackend:
     # --- claim / release ---
 
     async def claim(self, limit: int) -> list[str]:
-        """Move up to ``limit`` ready rows to DISPATCHING, committed before return.
-
-        Same ordering as the sync backend: priority, then effective due time
-        (``coalesce(scheduled_for, created_at)``), then age — so immediate work
-        cannot starve due scheduled and retried rows.
-        """
+        """Atomically expire deadlines and claim due PENDING or retryable FAILED rows."""
         now = datetime.now(UTC)
-        effective_due = func.coalesce(TaskEntryModel.scheduled_for, TaskEntryModel.created_at)
-        candidates = (
-            select(TaskEntryModel.id)
-            .where(
-                TaskEntryModel.status == TaskStatus.PENDING.value,
-                or_(
-                    TaskEntryModel.scheduled_for.is_(None),
-                    TaskEntryModel.scheduled_for <= now,
-                ),
-            )
-            .order_by(
-                TaskEntryModel.priority.desc(),
-                effective_due.asc(),
-                TaskEntryModel.created_at.asc(),
-            )
-            .limit(limit)
+        due = or_(TaskEntryModel.scheduled_for.is_(None), TaskEntryModel.scheduled_for <= now)
+        claimable = or_(
+            and_(TaskEntryModel.status == TaskStatus.PENDING.value, due),
+            and_(
+                TaskEntryModel.status == TaskStatus.FAILED.value,
+                TaskEntryModel.scheduled_for <= now,
+                TaskEntryModel.attempts < TaskEntryModel.max_attempts,
+            ),
         )
-        if self.queues is not None:
-            candidates = candidates.where(TaskEntryModel.queue.in_(self.queues))
-        if self._supports_skip_locked:
-            candidates = candidates.with_for_update(skip_locked=True)
+        effective_due = func.coalesce(TaskEntryModel.scheduled_for, TaskEntryModel.created_at)
 
-        # Lock first, then update the locked IDs — see the sync backend for why the
-        # single-statement version silently claims the whole table.
         async with self._session_factory() as session:
+            expired = select(TaskEntryModel.id).where(
+                TaskEntryModel.status.in_([TaskStatus.PENDING.value, TaskStatus.FAILED.value]),
+                TaskEntryModel.expires_at.is_not(None),
+                TaskEntryModel.expires_at <= now,
+            )
+            if self.queues is not None:
+                expired = expired.where(TaskEntryModel.queue.in_(self.queues))
+            if self._supports_skip_locked:
+                expired = expired.with_for_update(skip_locked=True)
+            result = await session.execute(expired.limit(limit))
+            expired_ids = list(result.scalars())
+            if expired_ids:
+                await session.execute(
+                    update(TaskEntryModel)
+                    .where(TaskEntryModel.id.in_(expired_ids))
+                    .values(
+                        status=TaskStatus.EXPIRED.value,
+                        expired_at=now,
+                        dispatching_at=None,
+                    )
+                )
+
+            candidates = (
+                select(TaskEntryModel.id)
+                .where(
+                    claimable,
+                    or_(TaskEntryModel.expires_at.is_(None), TaskEntryModel.expires_at > now),
+                )
+                .order_by(
+                    TaskEntryModel.priority.desc(),
+                    effective_due.asc(),
+                    TaskEntryModel.created_at.asc(),
+                )
+                .limit(limit)
+            )
+            if self.queues is not None:
+                candidates = candidates.where(TaskEntryModel.queue.in_(self.queues))
+            if self._supports_skip_locked:
+                candidates = candidates.with_for_update(skip_locked=True)
             result = await session.execute(candidates)
-            task_ids = list(result.scalars().all())
+            task_ids = list(result.scalars())
             if not task_ids:
-                await session.rollback()
+                await session.commit()
                 return []
             claimed_result = await session.execute(
                 update(TaskEntryModel)
                 .where(
                     TaskEntryModel.id.in_(task_ids),
-                    TaskEntryModel.status == TaskStatus.PENDING.value,
+                    TaskEntryModel.status.in_([TaskStatus.PENDING.value, TaskStatus.FAILED.value]),
                 )
                 .values(status=TaskStatus.DISPATCHING.value, dispatching_at=now)
                 .returning(TaskEntryModel.id)
@@ -299,6 +366,39 @@ class AsyncSQLAlchemyDispatchBackend:
             claimed = set(claimed_result.scalars())
             await session.commit()
         return [task_id for task_id in task_ids if task_id in claimed]
+
+    async def next_due(self) -> datetime | None:
+        """Earliest future schedule or deadline in this dispatcher's queue scope."""
+        now = datetime.now(UTC)
+        wake_at = case(
+            (
+                and_(
+                    TaskEntryModel.expires_at.is_not(None),
+                    TaskEntryModel.expires_at < TaskEntryModel.scheduled_for,
+                ),
+                TaskEntryModel.expires_at,
+            ),
+            else_=TaskEntryModel.scheduled_for,
+        )
+        stmt = select(func.min(wake_at)).where(
+            TaskEntryModel.scheduled_for.is_not(None),
+            or_(
+                TaskEntryModel.status == TaskStatus.PENDING.value,
+                and_(
+                    TaskEntryModel.status == TaskStatus.FAILED.value,
+                    TaskEntryModel.attempts < TaskEntryModel.max_attempts,
+                ),
+            ),
+        )
+        if self.queues is not None:
+            stmt = stmt.where(TaskEntryModel.queue.in_(self.queues))
+        async with self._session_factory() as session:
+            result = await session.execute(stmt)
+            due_at = result.scalar_one_or_none()
+            await session.rollback()
+        if due_at is not None and due_at.tzinfo is None:
+            due_at = due_at.replace(tzinfo=UTC)
+        return due_at if due_at is None or due_at >= now else now
 
     async def release(self, task_ids: Sequence[str]) -> None:
         """Return claimed rows to PENDING, leaving the attempt count untouched."""

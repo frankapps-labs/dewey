@@ -42,6 +42,7 @@ def create_task(
     priority: int | None = None,
     max_attempts: int | None = None,
     scheduled_for: datetime | None = None,
+    expires_at: datetime | None = None,
     idempotency_key: str | None = None,
     metadata: dict[str, Any] | None = None,
     using: str | None = None,
@@ -58,6 +59,8 @@ def create_task(
 
     Returns a TaskEntry dataclass (with .id).
     """
+    if expires_at is not None and expires_at.utcoffset() is None:
+        raise ValueError("expires_at must be a timezone-aware datetime")
     policy = resolve_policy(task_type)
     queue = policy.queue if queue is None else queue
     alias = resolve_db_alias(using)
@@ -70,6 +73,8 @@ def create_task(
         priority=policy.priority if priority is None else priority,
         max_attempts=policy.max_attempts if max_attempts is None else max_attempts,
         scheduled_for=scheduled_for,
+        initial_scheduled_for=scheduled_for,
+        expires_at=expires_at,
         idempotency_key=idempotency_key,
     )
 
@@ -141,6 +146,14 @@ def process_task(
         # intervened — a duplicate delivery is a logged no-op, never an error.
         if current_status not in _CLAIMABLE:
             logger.info("Task not claimable id=%s status=%s", task_id, task.status)
+            return False
+
+        if task.expires_at is not None and task.expires_at <= now:
+            task.status = TaskStatus.EXPIRED.value
+            task.expired_at = now
+            task.dispatching_at = None
+            task.save(update_fields=["status", "expired_at", "dispatching_at", "updated_at"])
+            logger.info("Task expired before handler invocation id=%s", task_id)
             return False
 
         # Respect scheduled_for scheduling

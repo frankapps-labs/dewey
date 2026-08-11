@@ -6,7 +6,12 @@ import pytest
 
 from dewey.core.states import TaskStatus
 from dewey.sqlalchemy.async_executor import create_task_async
-from dewey.sqlalchemy.async_sweep import sweep_async, sweep_failed_async, sweep_stuck_async
+from dewey.sqlalchemy.async_sweep import (
+    sweep_async,
+    sweep_expired_async,
+    sweep_failed_async,
+    sweep_stuck_async,
+)
 from dewey.sqlalchemy.models import TaskEntryModel
 
 
@@ -132,4 +137,22 @@ async def test_sweep_combined(async_session):
 @pytest.mark.asyncio
 async def test_sweep_empty(async_session):
     result = await sweep_async(async_session)
-    assert result == {"failed": [], "dispatching": [], "stuck": []}
+    assert result == {"expired": [], "failed": [], "dispatching": [], "stuck": []}
+
+
+@pytest.mark.asyncio
+async def test_sweep_expired_does_not_touch_processing(async_session):
+    waiting = await create_task_async(async_session, task_type="deadline")
+    processing = await create_task_async(async_session, task_type="deadline")
+    waiting.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    processing.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    processing.status = TaskStatus.PROCESSING.value
+    await async_session.commit()
+
+    assert await sweep_expired_async(async_session) == [waiting.id]
+    await async_session.commit()
+    await async_session.refresh(waiting)
+    await async_session.refresh(processing)
+    assert waiting.status == TaskStatus.EXPIRED.value
+    assert waiting.expired_at is not None
+    assert processing.status == TaskStatus.PROCESSING.value

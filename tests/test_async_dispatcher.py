@@ -72,6 +72,40 @@ class TestClaim:
 
         assert await backend.claim(10) == []
 
+    async def test_due_failed_retry_is_claimed_without_a_sweep(self, backend, async_session):
+        task = await create_task_async(async_session, task_type="t", max_attempts=3)
+        await async_session.flush()
+        await async_session.execute(
+            update(TaskEntryModel)
+            .where(TaskEntryModel.id == task.id)
+            .values(
+                status=TaskStatus.FAILED.value,
+                attempts=1,
+                scheduled_for=datetime.now(UTC) - timedelta(seconds=1),
+            )
+        )
+        await async_session.commit()
+
+        assert await backend.claim(10) == [task.id]
+
+    async def test_expired_ready_row_is_terminalized_not_dispatched(self, backend, async_session):
+        task = await create_task_async(async_session, task_type="t")
+        await async_session.flush()
+        await async_session.execute(
+            update(TaskEntryModel)
+            .where(TaskEntryModel.id == task.id)
+            .values(expires_at=datetime.now(UTC) - timedelta(seconds=1))
+        )
+        await async_session.commit()
+
+        assert await backend.claim(10) == []
+        row = await async_session.get(TaskEntryModel, task.id)
+        assert row is not None
+        await async_session.refresh(row)
+        assert row.status == TaskStatus.EXPIRED.value
+        assert row.expired_at is not None
+        assert row.attempts == 0
+
     async def test_due_scheduled_work_competes_with_immediate_work_on_due_time(
         self, backend, async_session
     ):

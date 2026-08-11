@@ -4,6 +4,7 @@ import threading
 import time
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
@@ -432,3 +433,40 @@ class TestHandlerInvocation:
         assert row is not None
         assert row.status == TaskStatus.FAILED.value
         assert "period" in row.error
+
+
+class TestExpiry:
+    def test_creation_persists_deadline_and_original_schedule(self, session):
+        scheduled = datetime.now(UTC) + timedelta(minutes=5)
+        expires = scheduled + timedelta(minutes=10)
+        task = create_task(
+            session,
+            task_type="deadline",
+            scheduled_for=scheduled,
+            expires_at=expires,
+        )
+        assert task.scheduled_for == scheduled
+        assert task.initial_scheduled_for == scheduled
+        assert task.expires_at == expires
+
+    def test_naive_deadline_is_rejected_before_db_work(self, session):
+        with pytest.raises(ValueError, match="timezone-aware"):
+            create_task(session, task_type="deadline", expires_at=datetime.now())
+        assert session.query(TaskEntryModel).count() == 0
+
+    def test_expired_delivery_never_invokes_handler_or_consumes_attempt(self, session):
+        task = create_task(
+            session,
+            task_type="deadline",
+            expires_at=datetime.now(UTC) - timedelta(seconds=1),
+        )
+        session.commit()
+        runs: list[int] = []
+
+        assert process_task(session, task.id, lambda: runs.append(1)) is False
+        row = session.get(TaskEntryModel, task.id)
+        session.refresh(row)
+        assert runs == []
+        assert row.status == TaskStatus.EXPIRED.value
+        assert row.expired_at is not None
+        assert row.attempts == 0

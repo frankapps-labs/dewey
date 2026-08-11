@@ -138,9 +138,9 @@ class TestDispatchingState:
         assert not TaskStatus.COMPLETED.can_transition_to(TaskStatus.DISPATCHING)
         assert not TaskStatus.DEAD.can_transition_to(TaskStatus.DISPATCHING)
 
-    def test_failed_is_redispatched_through_pending(self):
-        """The sweep resets FAILED to PENDING; it never dispatches directly."""
-        assert not TaskStatus.FAILED.can_transition_to(TaskStatus.DISPATCHING)
+    def test_due_failed_can_be_claimed_directly_or_recovered_through_pending(self):
+        """Direct claims remove sweep latency; recovery may still reset to PENDING."""
+        assert TaskStatus.FAILED.can_transition_to(TaskStatus.DISPATCHING)
         assert TaskStatus.FAILED.can_transition_to(TaskStatus.PENDING)
 
 
@@ -157,9 +157,8 @@ class TestExpiredState:
     def test_dispatching_can_expire(self):
         assert TaskStatus.DISPATCHING.can_transition_to(TaskStatus.EXPIRED) is True
 
-    def test_processing_can_expire(self):
-        """Enforced again before handler invocation — no attempt is consumed."""
-        assert TaskStatus.PROCESSING.can_transition_to(TaskStatus.EXPIRED) is True
+    def test_processing_cannot_be_expired_out_from_under_a_running_handler(self):
+        assert TaskStatus.PROCESSING.can_transition_to(TaskStatus.EXPIRED) is False
 
     def test_failed_can_expire(self):
         """A task awaiting retry expires instead of being redispatched."""

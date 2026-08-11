@@ -96,6 +96,17 @@ def get_dead(
     return _to_list(qs.order_by("-created_at")[:limit])
 
 
+def get_expired(
+    limit: int = 50,
+    task_type: str | None = None,
+) -> list[TaskEntryDC]:
+    """Tasks that reached their start deadline without running."""
+    qs = TaskEntry.objects.filter(status=TaskStatus.EXPIRED.value)
+    if task_type:
+        qs = qs.filter(task_type=task_type)
+    return _to_list(qs.order_by("-expired_at")[:limit])
+
+
 def get_task(task_id: str) -> TaskEntryDC | None:
     """Single task by ID — for detail views."""
     try:
@@ -137,7 +148,10 @@ def retry_task(task_id: str, using: str | None = None) -> TaskEntryDC | None:
         except TaskEntry.DoesNotExist:
             return None
 
-        if not TaskStatus(task.status).can_transition_to(TaskStatus.PENDING):
+        status = TaskStatus(task.status)
+        if status == TaskStatus.EXPIRED:
+            return None
+        if not status.can_transition_to(TaskStatus.PENDING):
             return task.to_dataclass()
 
         task.status = TaskStatus.PENDING.value

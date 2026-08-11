@@ -82,6 +82,56 @@ def sweep_failed(
     return [task_id for task_id, _queue in retry_rows]
 
 
+def sweep_expired(session: Session, limit: int = 100) -> list[str]:
+    """Terminalize bounded deadline candidates; never touch active PROCESSING rows."""
+    now = datetime.now(UTC)
+    stmt = (
+        select(TaskEntryModel.id)
+        .where(
+            TaskEntryModel.status.in_(
+                [
+                    TaskStatus.PENDING.value,
+                    TaskStatus.FAILED.value,
+                    TaskStatus.DISPATCHING.value,
+                ]
+            ),
+            TaskEntryModel.expires_at.is_not(None),
+            TaskEntryModel.expires_at <= now,
+        )
+        .order_by(TaskEntryModel.expires_at)
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    )
+    task_ids = list(session.execute(stmt).scalars())
+    if not task_ids:
+        return []
+    expired_ids = list(
+        session.execute(
+            update(TaskEntryModel)
+            .where(
+                TaskEntryModel.id.in_(task_ids),
+                TaskEntryModel.status.in_(
+                    [
+                        TaskStatus.PENDING.value,
+                        TaskStatus.FAILED.value,
+                        TaskStatus.DISPATCHING.value,
+                    ]
+                ),
+            )
+            .values(
+                status=TaskStatus.EXPIRED.value,
+                expired_at=now,
+                dispatching_at=None,
+            )
+            .returning(TaskEntryModel.id)
+        ).scalars()
+    )
+    session.flush()
+    if expired_ids:
+        logger.info("Sweep expired %d task(s)", len(expired_ids))
+    return expired_ids
+
+
 def sweep_stuck(
     session: Session,
     stuck_threshold_minutes: int = DEFAULT_STUCK_THRESHOLD_MINUTES,
@@ -236,6 +286,7 @@ def sweep(
     calling it, failed tasks never become eligible for retry.
     """
     return {
+        "expired": sweep_expired(session, limit=limit),
         "failed": sweep_failed(session, limit=limit),
         "dispatching": sweep_dispatching(
             session, dispatch_timeout_seconds=dispatch_timeout_seconds, limit=limit

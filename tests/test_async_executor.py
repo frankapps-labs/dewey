@@ -214,3 +214,38 @@ async def test_process_task_respects_scheduled_for(async_session):
 
     row = await async_session.get(TaskEntryModel, task.id)
     assert row.status == TaskStatus.PENDING.value
+
+
+@pytest.mark.asyncio
+async def test_expiry_creation_and_delivery(async_session):
+    scheduled = datetime.now(UTC) + timedelta(minutes=5)
+    expires = scheduled + timedelta(minutes=10)
+    task = await create_task_async(
+        async_session,
+        task_type="deadline",
+        scheduled_for=scheduled,
+        expires_at=expires,
+    )
+    assert task.initial_scheduled_for == scheduled
+    assert task.expires_at == expires
+    task.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    await async_session.commit()
+    runs: list[int] = []
+
+    async def handler():
+        runs.append(1)
+
+    assert await process_task_async(async_session, task.id, handler) is False
+    row = await async_session.get(TaskEntryModel, task.id)
+    assert row is not None
+    await async_session.refresh(row)
+    assert runs == []
+    assert row.status == TaskStatus.EXPIRED.value
+    assert row.expired_at is not None
+    assert row.attempts == 0
+
+
+@pytest.mark.asyncio
+async def test_naive_expiry_is_rejected(async_session):
+    with pytest.raises(ValueError, match="timezone-aware"):
+        await create_task_async(async_session, task_type="deadline", expires_at=datetime.now())

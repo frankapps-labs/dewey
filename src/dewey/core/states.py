@@ -54,10 +54,10 @@ _ALLOWED_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
         TaskStatus.FAILED,
         TaskStatus.DEAD,
         TaskStatus.PENDING,  # sweep_stuck resets abandoned tasks
-        TaskStatus.EXPIRED,  # deadline passed before the handler was invoked
     },
     TaskStatus.FAILED: {
         TaskStatus.PENDING,
+        TaskStatus.DISPATCHING,  # directly claimed when its retry is due
         TaskStatus.DEAD,
         TaskStatus.EXPIRED,  # deadline passed while waiting for a retry
     },

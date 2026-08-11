@@ -35,6 +35,9 @@ def _to_dataclass(row: TaskEntryModel) -> TaskEntry:
         completed_at=row.completed_at,
         idempotency_key=row.idempotency_key,
         metadata=row.task_metadata,
+        expires_at=row.expires_at,
+        initial_scheduled_for=row.initial_scheduled_for,
+        expired_at=row.expired_at,
     )
 
 
@@ -148,6 +151,20 @@ async def get_dead_async(
     return _to_list(result.scalars().all())
 
 
+async def get_expired_async(
+    session: AsyncSession,
+    limit: int = 50,
+    task_type: str | None = None,
+) -> list[TaskEntry]:
+    """Tasks that reached their start deadline without running."""
+    stmt = select(TaskEntryModel).where(TaskEntryModel.status == TaskStatus.EXPIRED.value)
+    if task_type:
+        stmt = stmt.where(TaskEntryModel.task_type == task_type)
+    stmt = stmt.order_by(TaskEntryModel.expired_at.desc()).limit(limit)
+    result = await session.execute(stmt)
+    return _to_list(result.scalars().all())
+
+
 async def get_task_async(session: AsyncSession, task_id: str) -> TaskEntry | None:
     """Single task by ID — for detail views."""
     stmt = select(TaskEntryModel).where(TaskEntryModel.id == task_id)
@@ -188,6 +205,8 @@ async def retry_task_async(session: AsyncSession, task_id: str) -> TaskEntry | N
         return None
 
     status = TaskStatus(task.status)
+    if status == TaskStatus.EXPIRED:
+        return None
     if not status.can_transition_to(TaskStatus.PENDING):
         return _to_dataclass(task)
 

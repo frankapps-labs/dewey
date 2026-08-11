@@ -84,6 +84,44 @@ def sweep_failed(limit: int = 100, using: str | None = None) -> list[str]:
     return retry_ids
 
 
+def sweep_expired(limit: int = 100, using: str | None = None) -> list[str]:
+    """Terminalize bounded deadline candidates; never touch active PROCESSING rows."""
+    now = datetime.now(UTC)
+    alias = resolve_db_alias(using)
+    with transaction.atomic(using=alias):
+        task_ids = list(
+            TaskEntry.objects.using(alias)
+            .select_for_update(skip_locked=True)
+            .filter(
+                status__in=[
+                    TaskStatus.PENDING.value,
+                    TaskStatus.FAILED.value,
+                    TaskStatus.DISPATCHING.value,
+                ],
+                expires_at__isnull=False,
+                expires_at__lte=now,
+            )
+            .order_by("expires_at")
+            .values_list("id", flat=True)[:limit]
+        )
+        if not task_ids:
+            return []
+        TaskEntry.objects.using(alias).filter(
+            id__in=task_ids,
+            status__in=[
+                TaskStatus.PENDING.value,
+                TaskStatus.FAILED.value,
+                TaskStatus.DISPATCHING.value,
+            ],
+        ).update(
+            status=TaskStatus.EXPIRED.value,
+            expired_at=now,
+            dispatching_at=None,
+        )
+    logger.info("Sweep expired %d task(s)", len(task_ids))
+    return task_ids
+
+
 def sweep_stuck(
     stuck_threshold_minutes: int = DEFAULT_STUCK_THRESHOLD_MINUTES,
     limit: int = 100,
@@ -250,6 +288,7 @@ def sweep(
     database alias; when omitted, the project's routers decide.
     """
     return {
+        "expired": sweep_expired(limit=limit, using=using),
         "failed": sweep_failed(limit=limit, using=using),
         "dispatching": sweep_dispatching(
             dispatch_timeout_seconds=dispatch_timeout_seconds, limit=limit, using=using
