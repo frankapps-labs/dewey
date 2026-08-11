@@ -35,6 +35,7 @@ class TestGetStats:
             "completed": 0,
             "failed": 0,
             "dead": 0,
+            "expired": 0,
         }
 
     def test_counts_by_status(self, session):

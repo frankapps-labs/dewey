@@ -13,6 +13,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    and_,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -27,6 +28,16 @@ class Base(DeclarativeBase):
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+# Statuses that can still transition to EXPIRED — the deadline scan only ever
+# needs to look at these rows.
+_EXPIRY_CANDIDATE_STATUSES = (
+    TaskStatus.PENDING.value,
+    TaskStatus.DISPATCHING.value,
+    TaskStatus.PROCESSING.value,
+    TaskStatus.FAILED.value,
+)
 
 
 class TaskEntryModel(Base):
@@ -74,9 +85,19 @@ class TaskEntryModel(Base):
         DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
     )
     scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Immutable snapshot of the creation-time schedule. scheduled_for mutates on
+    # retry; idempotent creation matches against this internal field instead.
+    initial_scheduled_for: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     dispatching_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Deadline and expiry: now == expires_at is already expired; expired_at is the
+    # audit timestamp for when Dewey observed the deadline had passed.
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Idempotency
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -115,9 +136,58 @@ class TaskEntryModel(Base):
             "scheduled_for",
             postgresql_where=(status == TaskStatus.FAILED.value),
         ),
+        # Partial index: nonterminal rows with a deadline — expiry enforcement
+        # scans only tasks that can still transition to EXPIRED
+        Index(
+            "ix_task_entries_expires_at",
+            "expires_at",
+            postgresql_where=and_(
+                status.in_(_EXPIRY_CANDIDATE_STATUSES),
+                expires_at.is_not(None),
+            ),
+        ),
         # Composite: recent tasks by type (dashboard queries)
         Index("ix_task_entries_type_created", "task_type", "created_at"),
     )
 
     def __repr__(self) -> str:
         return f"<TaskEntry id={self.id!r} type={self.task_type!r} status={self.status!r}>"
+
+
+class DispatcherHeartbeatModel(Base):
+    """
+    Dispatcher liveness row — one per running dispatcher instance.
+
+    Mirrors :class:`dewey.core.heartbeat.DispatcherHeartbeat`. Stores only a
+    random instance identifier, Dewey version, backend kind, non-secret database
+    identifier, queues, and timestamps — never DSNs, credentials, hostnames, or
+    process environment. Staleness is decided by readers comparing last_seen_at;
+    there is no database-level TTL.
+    """
+
+    __tablename__ = "dewey_dispatcher_heartbeats"
+
+    #: Random identifier minted by the dispatcher at startup — not a hostname or PID.
+    instance_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    dewey_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    #: Backend kind, e.g. "django" or "sqlalchemy".
+    backend: Mapped[str] = mapped_column(String(50), nullable=False)
+    #: Non-secret database alias/identifier — never a DSN.
+    database: Mapped[str] = mapped_column(String(200), nullable=False)
+    #: Queues this dispatcher serves; NULL means all queues.
+    queues: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        # Freshness checks and stale-row cleanup scan by last seen time
+        Index("ix_dewey_heartbeats_last_seen", "last_seen_at"),
+        # Readiness matches a dispatcher by backend kind and database identifier
+        Index("ix_dewey_heartbeats_backend_database", "backend", "database"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<DispatcherHeartbeat instance_id={self.instance_id!r} "
+            f"backend={self.backend!r} database={self.database!r}>"
+        )

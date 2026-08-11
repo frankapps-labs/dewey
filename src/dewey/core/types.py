@@ -31,6 +31,16 @@ class TaskEntry:
     completed_at: datetime | None = None
     idempotency_key: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    #: Absolute deadline for starting handler execution. A task observed before
+    #: invocation at ``now == expires_at`` is expired. None means no deadline.
+    expires_at: datetime | None = None
+    #: Immutable snapshot of the creation-time schedule. ``scheduled_for`` mutates
+    #: on retry, so idempotent creation matches against this internal field instead.
+    #: Written once at creation and never updated.
+    initial_scheduled_for: datetime | None = None
+    #: Audit timestamp: when Dewey observed the deadline had passed. The status
+    #: EXPIRED is the reason; this records the moment.
+    expired_at: datetime | None = None
 
     @property
     def is_terminal(self) -> bool:

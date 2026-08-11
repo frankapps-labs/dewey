@@ -40,6 +40,7 @@ class TaskEntry(models.Model):
         COMPLETED = TaskStatus.COMPLETED.value, "Completed"
         FAILED = TaskStatus.FAILED.value, "Failed"
         DEAD = TaskStatus.DEAD.value, "Dead"
+        EXPIRED = TaskStatus.EXPIRED.value, "Expired"
 
     id = models.CharField(max_length=36, primary_key=True, default=new_uuid, editable=False)
     task_type = models.CharField(max_length=100, db_index=True)
@@ -68,9 +69,17 @@ class TaskEntry(models.Model):
     created_at = models.DateTimeField(default=utcnow, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
     scheduled_for = models.DateTimeField(null=True, blank=True)
+    # Immutable snapshot of the creation-time schedule. scheduled_for mutates on
+    # retry; idempotent creation matches against this internal field instead.
+    initial_scheduled_for = models.DateTimeField(null=True, editable=False)
     dispatching_at = models.DateTimeField(null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
+
+    # Deadline and expiry: now == expires_at is already expired; expired_at is the
+    # audit timestamp for when Dewey observed the deadline had passed.
+    expires_at = models.DateTimeField(null=True, blank=True)
+    expired_at = models.DateTimeField(null=True, blank=True)
 
     # Idempotency
     idempotency_key = models.CharField(max_length=255, null=True, blank=True)
@@ -108,6 +117,16 @@ class TaskEntry(models.Model):
                 name="ix_task_failed_sched",
                 condition=models.Q(status="failed"),
             ),
+            # Partial index: nonterminal rows with a deadline — expiry enforcement
+            # scans only tasks that can still transition to EXPIRED
+            models.Index(
+                fields=["expires_at"],
+                name="ix_task_expires",
+                condition=models.Q(
+                    expires_at__isnull=False,
+                    status__in=["pending", "dispatching", "processing", "failed"],
+                ),
+            ),
             # Composite: recent tasks by type
             models.Index(
                 fields=["task_type", "created_at"],
@@ -141,6 +160,49 @@ class TaskEntry(models.Model):
             completed_at=self.completed_at,
             idempotency_key=self.idempotency_key,
             metadata=self.metadata,
+            expires_at=self.expires_at,
+            initial_scheduled_for=self.initial_scheduled_for,
+            expired_at=self.expired_at,
+        )
+
+
+class DispatcherHeartbeat(models.Model):
+    """
+    Dispatcher liveness row — one per running dispatcher instance.
+
+    Mirrors the SQLAlchemy DispatcherHeartbeatModel and the framework-agnostic
+    dewey.core.heartbeat.DispatcherHeartbeat contract. Stores only a random
+    instance identifier, Dewey version, backend kind, non-secret database
+    identifier, queues, and timestamps — never DSNs, credentials, hostnames, or
+    process environment. Staleness is decided by readers comparing last_seen_at;
+    there is no database-level TTL.
+    """
+
+    # Random identifier minted by the dispatcher at startup — not a hostname or PID.
+    instance_id = models.CharField(max_length=36, primary_key=True)
+    dewey_version = models.CharField(max_length=50)
+    # Backend kind, e.g. "django" or "sqlalchemy".
+    backend = models.CharField(max_length=50)
+    # Non-secret database alias/identifier — never a DSN.
+    database = models.CharField(max_length=200)
+    # Queues this dispatcher serves; NULL means all queues.
+    queues = models.JSONField(null=True, blank=True)
+    started_at = models.DateTimeField()
+    last_seen_at = models.DateTimeField()
+
+    class Meta:
+        db_table = "dewey_dispatcher_heartbeats"
+        indexes = [
+            # Freshness checks and stale-row cleanup scan by last seen time
+            models.Index(fields=["last_seen_at"], name="ix_heartbeat_last_seen"),
+            # Readiness matches a dispatcher by backend kind and database identifier
+            models.Index(fields=["backend", "database"], name="ix_heartbeat_backend_db"),
+        ]
+
+    def __str__(self) -> str:
+        return (
+            f"<DispatcherHeartbeat instance_id={self.instance_id!r} "
+            f"backend={self.backend!r} database={self.database!r}>"
         )
 
 

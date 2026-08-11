@@ -33,6 +33,7 @@ async def test_get_stats_empty(async_session):
         "completed": 0,
         "failed": 0,
         "dead": 0,
+        "expired": 0,
     }
 
 
