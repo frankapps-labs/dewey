@@ -1,12 +1,14 @@
-"""The documented non-default alias/router deployment, end to end.
+"""The documented non-default alias deployment, end to end.
 
-docs/getting-started.md tells multi-database projects to give Dewey its own
-DATABASES alias, plus a router so Dewey's models resolve to it. That is only
+docs/getting-started.md tells multi-database projects to give the dispatcher and
+worker their own DATABASES alias. Where a project has routers, that is only
 correct if every transaction, SELECT FOR UPDATE, write and NOTIFY runs on the
 same resolved alias — ``transaction.atomic()`` does not consult routers, so an
 atomic block opened on "default" around a query routed elsewhere locks nothing
 and sends the commit-gated NOTIFY on a connection that never wrote the row.
-These tests pin the resolved-alias contract for create, process and sweep.
+These tests pin the resolved-alias contract for create, process and sweep, and
+the producer-atomicity contract the docs lead with: one alias is one
+transaction; two aliases are two, and never roll back together.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from datetime import UTC, datetime, timedelta
 
 import django
 import pytest
+from django.db import transaction
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "tests.django_settings")
 django.setup()
@@ -192,3 +195,52 @@ class TestRouterResolution:
 
         assert result["failed"] == [task.id]
         assert TaskEntry.objects.using("second").get(id=task.id).status == TaskStatus.PENDING.value
+
+
+class _RollBack(Exception):
+    """Raised to abort the producer's transaction deliberately."""
+
+
+@pytest.mark.django_db(transaction=True, databases=["default", "second"])
+class TestProducerAtomicity:
+    """The producer contract docs/getting-started.md leads with: create_task on the
+    business write's alias shares its connection and transaction, so the pair
+    commits or rolls back as one. A different alias never shares it — a second
+    alias is a second connection and a second transaction, and that is equally
+    true when two aliases point at one physical database."""
+
+    def test_business_row_and_task_roll_back_together_on_one_alias(self):
+        # No business app is installed in the test project, so a directly created
+        # TaskEntry stands in for the business row: any ORM write on the
+        # producer's alias behaves identically, and it needs no extra migration.
+        with pytest.raises(_RollBack):
+            with transaction.atomic(using="second"):
+                business = TaskEntry.objects.using("second").create(task_type="business.row")
+                task = create_task(task_type="orders.confirm", using="second")
+                # Both rows are visible inside the transaction that wrote them.
+                assert TaskEntry.objects.using("second").filter(id=business.id).exists()
+                assert TaskEntry.objects.using("second").filter(id=task.id).exists()
+                raise _RollBack
+
+        # One alias, one connection, one transaction: the rollback took both.
+        assert not TaskEntry.objects.using("second").filter(id=business.id).exists()
+        assert not TaskEntry.objects.using("second").filter(id=task.id).exists()
+
+    def test_split_aliases_do_not_share_atomicity(self):
+        # The business write runs in a transaction on "default" while the task is
+        # written through "second" — exactly what a catch-all router sending
+        # TaskEntry writes to a background alias would do silently.
+        with pytest.raises(_RollBack):
+            with transaction.atomic(using="default"):
+                business = TaskEntry.objects.using("default").create(task_type="business.row")
+                task = create_task(task_type="orders.confirm", using="second")
+                raise _RollBack
+
+        # The business row rolled back...
+        assert not TaskEntry.objects.using("default").filter(id=business.id).exists()
+        # ...but the task committed anyway. "second" never joined the producer's
+        # transaction: it is its own connection in autocommit, so the write was
+        # durable the moment it happened, rollback next door notwithstanding.
+        orphan = TaskEntry.objects.using("second").get(id=task.id)
+        assert orphan.status == TaskStatus.PENDING.value
+        assert not TaskEntry.objects.using("default").filter(id=task.id).exists()

@@ -76,27 +76,38 @@ the recovery sweep.
 python manage.py dewey_dispatcher
 ```
 
-**4. Run a worker.** Ordinary Huey. The adapter is wired in a module both processes
-import.
-
-```python
-# myapp/tasks.py
-from huey import RedisHuey
-from dewey.adapters.huey import HueyAdapter
-from dewey.django import process_task
-
-huey = RedisHuey("myapp")
-adapter = HueyAdapter(huey)
-adapter.register(process_task)
-```
-
-```bash
-huey_consumer myapp.tasks.huey
-```
+**4. Run a worker.** Ordinary Huey. For Django, `dewey.contrib.django_huey` is the
+wiring: importing it registers Dewey's processor on `huey.contrib.djhuey.HUEY` exactly
+once, with Huey retries disabled and `close_db` around each task.
 
 ```python
 # settings.py
-DEWEY = {"DISPATCH": "myapp.tasks.adapter.dispatch"}
+HUEY = {...}  # Huey's normal Django configuration
+DEWEY = {"DISPATCH": "dewey.contrib.django_huey.dispatch"}
+
+# myapp/tasks.py — imported by Huey's normal Django task discovery
+from dewey.contrib.django_huey import adapter, dispatch  # noqa: F401
+```
+
+```bash
+python manage.py run_huey
+```
+
+`DEWEY["DISPATCH"]` must name a module-level callable — it is resolved with Django's
+`import_string`, so an object traversal such as `"myapp.tasks.adapter.dispatch"` cannot
+be imported. If you wire Huey yourself, expose a module-level wrapper:
+
+```python
+# myapp/tasks.py
+from huey.contrib.djhuey import HUEY, close_db
+from dewey.adapters.huey import HueyAdapter
+from dewey.django import process_task
+
+adapter = HueyAdapter(HUEY)
+adapter.register(close_db(process_task))
+
+def dispatch(task_id: str):
+    return adapter.dispatch(task_id)   # DEWEY = {"DISPATCH": "myapp.tasks.dispatch"}
 ```
 
 That is the whole loop. SQLAlchemy — sync and async — works the same way; see
@@ -161,6 +172,13 @@ path. `DEAD → PENDING` is a manual retry.
 - **Give Dewey its own bounded connection pool** when it shares a database with your
   request handlers, so background pressure cannot become user-visible latency. See
   [sharing a database](https://github.com/frankapps-labs/dewey/blob/main/docs/getting-started.md#sharing-a-database-with-your-application).
+- **Producer, dispatcher and worker are three database roles.** The producer's
+  `create_task` must use the same alias — and therefore the same connection and
+  transaction — as the business write it belongs to; that is what makes the rollback
+  guarantee real. The dispatcher (`DEWEY["DATABASE"]`) and worker
+  (`DEWEY["WORKER_DATABASE"]`) open their own connections after commit. Two aliases
+  pointing at one physical Postgres are still two connections and two transactions, so
+  never route producer `TaskEntry` writes to a background alias.
 
 ## Documentation
 

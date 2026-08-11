@@ -3,9 +3,9 @@
 One dict, so it is obvious in a diff what Dewey is configured to do::
 
     DEWEY = {
-        # Dotted path to the transport's dispatch callable. Required to run the
-        # dispatcher; usually "myapp.tasks.adapter.dispatch".
-        "DISPATCH": "myapp.tasks.adapter.dispatch",
+        # Dotted path to a module-level transport dispatch callable. Required to
+        # run the dispatcher; prefer Dewey's first-class Django/Huey integration.
+        "DISPATCH": "dewey.contrib.django_huey.dispatch",
 
         # Optional, shown with their defaults:
         "QUEUES": None,                    # None means every queue
@@ -16,6 +16,11 @@ One dict, so it is obvious in a diff what Dewey is configured to do::
         "STUCK_THRESHOLD_MINUTES": 10,
         "SWEEP_LIMIT": 100,
         "DATABASE": "default",             # alias, for a dedicated Dewey connection
+
+        # Worker-side alias, used by dewey.contrib.django_huey when processing a
+        # task. Independent of DATABASE on purpose: the dispatcher and the worker
+        # are separate post-commit connections. None defers to your routers.
+        "WORKER_DATABASE": None,
     }
 """
 
@@ -35,6 +40,7 @@ DEFAULTS: dict[str, Any] = {
     "STUCK_THRESHOLD_MINUTES": 10,
     "SWEEP_LIMIT": 100,
     "DATABASE": "default",
+    "WORKER_DATABASE": None,
 }
 
 
@@ -73,9 +79,10 @@ def get_dispatch_fn() -> Any:
     path = get_settings()["DISPATCH"]
     if not path:
         raise ImproperlyConfigured(
-            'DEWEY["DISPATCH"] is not set. Point it at your transport adapter\'s '
-            'dispatch method, e.g. "myapp.tasks.adapter.dispatch". The dispatcher has '
-            "nothing to hand work to without it."
+            'DEWEY["DISPATCH"] is not set. Point it at a module-level transport '
+            'callable, e.g. "dewey.contrib.django_huey.dispatch" or '
+            '"myapp.tasks.dispatch". Django import_string cannot traverse an adapter '
+            "object to reach its bound method."
         )
     if callable(path):
         return path
