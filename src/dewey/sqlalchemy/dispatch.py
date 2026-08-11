@@ -4,18 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from collections.abc import Callable, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import Engine, and_, case, func, or_, select, update
+from sqlalchemy import Engine, and_, case, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session, sessionmaker
 
+from dewey import __version__
+from dewey.core.heartbeat import DEFAULT_HEARTBEAT_RETENTION_DAYS
 from dewey.core.states import TaskStatus
 from dewey.listen_sync import DEFAULT_WORK_CHANNEL, SyncWorkListener
 from dewey.sqlalchemy.async_sweep import sweep_async
 from dewey.sqlalchemy.listen import AsyncPostgresWorkListener
-from dewey.sqlalchemy.models import TaskEntryModel
+from dewey.sqlalchemy.models import DispatcherHeartbeatModel, TaskEntryModel
 from dewey.sqlalchemy.sweep import (
     DEFAULT_DISPATCH_TIMEOUT_SECONDS,
     DEFAULT_STUCK_THRESHOLD_MINUTES,
@@ -52,6 +55,7 @@ class SQLAlchemyDispatchBackend:
         sweep_limit: int = 100,
         channel: str = DEFAULT_WORK_CHANNEL,
         session_factory: Callable[[], Session] | None = None,
+        database_identity: str | None = None,
     ) -> None:
         self.engine = engine
         self.queues = list(queues) if queues else None
@@ -68,6 +72,9 @@ class SQLAlchemyDispatchBackend:
             )
         self._listener = SyncWorkListener(self._raw_connection, channel=channel)
         self._listener_opened = False
+        self.instance_id = str(uuid.uuid4())
+        self.database_identity = database_identity or f"sqlalchemy:{engine.dialect.name}"
+        self.started_at = datetime.now(UTC)
 
     # --- claim / release ---
 
@@ -204,6 +211,33 @@ class SQLAlchemyDispatchBackend:
             session.commit()
         return result
 
+    # --- readiness ---
+
+    def heartbeat(self) -> None:
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(days=DEFAULT_HEARTBEAT_RETENTION_DAYS)
+        with self._session_factory() as session:
+            row = session.get(DispatcherHeartbeatModel, self.instance_id)
+            if row is None:
+                row = DispatcherHeartbeatModel(
+                    instance_id=self.instance_id,
+                    dewey_version=__version__,
+                    backend="sqlalchemy",
+                    database=self.database_identity,
+                    queues=self.queues,
+                    started_at=self.started_at,
+                    last_seen_at=now,
+                )
+                session.add(row)
+            else:
+                row.last_seen_at = now
+            session.execute(
+                delete(DispatcherHeartbeatModel).where(
+                    DispatcherHeartbeatModel.last_seen_at < cutoff
+                )
+            )
+            session.commit()
+
     # --- wake-up ---
 
     def wait_for_work(self, timeout: float) -> bool:
@@ -221,6 +255,16 @@ class SQLAlchemyDispatchBackend:
         return _sleep(timeout)
 
     def close(self) -> None:
+        try:
+            with self._session_factory() as session:
+                session.execute(
+                    delete(DispatcherHeartbeatModel).where(
+                        DispatcherHeartbeatModel.instance_id == self.instance_id
+                    )
+                )
+                session.commit()
+        except Exception:
+            logger.warning("Could not remove dispatcher heartbeat", exc_info=True)
         self._listener.close()
 
     def _raw_connection(self):
@@ -273,6 +317,7 @@ class AsyncSQLAlchemyDispatchBackend:
         sweep_limit: int = 100,
         channel: str = DEFAULT_WORK_CHANNEL,
         session_factory: Callable[[], AsyncSession] | None = None,
+        database_identity: str | None = None,
     ) -> None:
         self.engine = engine
         self.queues = list(queues) if queues else None
@@ -292,6 +337,9 @@ class AsyncSQLAlchemyDispatchBackend:
             )
         self._listener: AsyncPostgresWorkListener | None = None
         self._listener_started = False
+        self.instance_id = str(uuid.uuid4())
+        self.database_identity = database_identity or f"sqlalchemy:{engine.dialect.name}"
+        self.started_at = datetime.now(UTC)
 
     # --- claim / release ---
 
@@ -428,6 +476,33 @@ class AsyncSQLAlchemyDispatchBackend:
             await session.commit()
         return result
 
+    # --- readiness ---
+
+    async def heartbeat(self) -> None:
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(days=DEFAULT_HEARTBEAT_RETENTION_DAYS)
+        async with self._session_factory() as session:
+            row = await session.get(DispatcherHeartbeatModel, self.instance_id)
+            if row is None:
+                row = DispatcherHeartbeatModel(
+                    instance_id=self.instance_id,
+                    dewey_version=__version__,
+                    backend="sqlalchemy-async",
+                    database=self.database_identity,
+                    queues=self.queues,
+                    started_at=self.started_at,
+                    last_seen_at=now,
+                )
+                session.add(row)
+            else:
+                row.last_seen_at = now
+            await session.execute(
+                delete(DispatcherHeartbeatModel).where(
+                    DispatcherHeartbeatModel.last_seen_at < cutoff
+                )
+            )
+            await session.commit()
+
     # --- wake-up ---
 
     async def wait_for_work(self, timeout: float) -> bool:
@@ -447,6 +522,16 @@ class AsyncSQLAlchemyDispatchBackend:
         return False
 
     async def close(self) -> None:
+        try:
+            async with self._session_factory() as session:
+                await session.execute(
+                    delete(DispatcherHeartbeatModel).where(
+                        DispatcherHeartbeatModel.instance_id == self.instance_id
+                    )
+                )
+                await session.commit()
+        except Exception:
+            logger.warning("Could not remove async dispatcher heartbeat", exc_info=True)
         if self._listener is not None:
             await self._listener.__aexit__(None, None, None)
             self._listener = None

@@ -9,6 +9,7 @@ from dewey.sqlalchemy.async_executor import (
 from dewey.sqlalchemy.async_queries import (
     bulk_retry_async,
     get_dead_async,
+    get_dispatchers_async,
     get_dispatching_async,
     get_expired_async,
     get_failed_async,
@@ -45,6 +46,7 @@ from dewey.sqlalchemy.models import Base, DispatcherHeartbeatModel, TaskEntryMod
 from dewey.sqlalchemy.queries import (
     bulk_retry,
     get_dead,
+    get_dispatchers,
     get_dispatching,
     get_expired,
     get_failed,
@@ -93,6 +95,7 @@ __all__ = [
     # Task queries & actions
     "get_stats",
     "get_pending",
+    "get_dispatchers",
     "get_dispatching",
     "get_processing",
     "get_stuck",
@@ -119,6 +122,7 @@ __all__ = [
     # Task queries & actions
     "get_stats_async",
     "get_pending_async",
+    "get_dispatchers_async",
     "get_dispatching_async",
     "get_processing_async",
     "get_stuck_async",

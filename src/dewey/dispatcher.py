@@ -35,6 +35,8 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
+from dewey.core.heartbeat import DEFAULT_HEARTBEAT_INTERVAL_SECONDS
+
 logger = logging.getLogger(__name__)
 
 #: Claim this many rows per round trip.
@@ -78,6 +80,10 @@ class DispatchBackend(Protocol):
 
     def next_due(self) -> datetime | None:
         """Earliest scheduled work or deadline for this backend's queue scope."""
+        ...
+
+    def heartbeat(self) -> None:
+        """Persist this dispatcher's non-secret readiness identity."""
         ...
 
     def wait_for_work(self, timeout: float) -> bool:
@@ -196,6 +202,7 @@ class Dispatcher:
         database_retry_cap_seconds: float = DEFAULT_DATABASE_RETRY_CAP_SECONDS,
         monotonic: Callable[[], float] = time.monotonic,
         wall_clock: Callable[[], datetime] = _utcnow,
+        heartbeat_interval_seconds: float = DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
     ) -> None:
         if batch_size < 1:
             raise ValueError(f"batch_size must be >= 1, got {batch_size!r}")
@@ -213,6 +220,7 @@ class Dispatcher:
             "Database", dispatch_retry_base_seconds, database_retry_cap_seconds, monotonic
         )
         self._sweep_clock = _SweepClock(sweep_interval_seconds, monotonic)
+        self._heartbeat_clock = _SweepClock(heartbeat_interval_seconds, monotonic)
         self._wall_clock = wall_clock
         self._stop = threading.Event()
         # Claims we could not return to PENDING because the database was unreachable.
@@ -269,6 +277,20 @@ class Dispatcher:
         _log_sweep(result)
         return result
 
+    def maybe_heartbeat(self) -> bool:
+        """Write readiness on a bounded cadence without making dispatch depend on it."""
+        if not self._heartbeat_clock.due():
+            return False
+        heartbeat = getattr(self.backend, "heartbeat", None)
+        if heartbeat is None:
+            return False
+        try:
+            heartbeat()
+        except Exception:
+            logger.warning("Dewey dispatcher heartbeat failed; dispatch continues", exc_info=True)
+            return False
+        return True
+
     # --- the loop ---
 
     def run(self, *, max_iterations: int | None = None) -> None:
@@ -278,8 +300,15 @@ class Dispatcher:
         racing a thread.
         """
         logger.info(
-            "Dewey dispatcher starting (batch_size=%d idle_poll=%.1fs recovery_sweep=%s "
-            "retry_scheduling=direct)",
+            "Dewey dispatcher starting (instance=%s database=%s queues=%s batch_size=%d "
+            "idle_poll=%.1fs recovery_sweep=%s retry_scheduling=direct)",
+            getattr(self.backend, "instance_id", "unreported"),
+            getattr(
+                self.backend,
+                "database_identity",
+                getattr(self.backend, "using", "unreported"),
+            ),
+            getattr(self.backend, "queues", None) or "all",
             self.batch_size,
             self.idle_poll_seconds,
             f"{self.sweep_interval_seconds}s" if self.sweep_interval_seconds else "disabled",
@@ -297,6 +326,7 @@ class Dispatcher:
                     # The sweep runs even while a stranded release pauses claiming:
                     # it is recovery, and a broken release path must not also stop
                     # retries becoming eligible or timed-out claims being reclaimed.
+                    self.maybe_heartbeat()
                     self.maybe_sweep()
                     if not release_ready:
                         # Do not claim more work while rows we already own remain
@@ -429,6 +459,10 @@ class AsyncDispatchBackend(Protocol):
         """Earliest scheduled work or deadline for this backend's queue scope."""
         ...
 
+    async def heartbeat(self) -> None:
+        """Persist this dispatcher's non-secret readiness identity."""
+        ...
+
     async def wait_for_work(self, timeout: float) -> bool:
         """Wait until notified or ``timeout`` elapses. True if notified."""
         ...
@@ -468,6 +502,7 @@ class AsyncDispatcher:
         database_retry_cap_seconds: float = DEFAULT_DATABASE_RETRY_CAP_SECONDS,
         monotonic: Callable[[], float] = time.monotonic,
         wall_clock: Callable[[], datetime] = _utcnow,
+        heartbeat_interval_seconds: float = DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
     ) -> None:
         if batch_size < 1:
             raise ValueError(f"batch_size must be >= 1, got {batch_size!r}")
@@ -484,6 +519,7 @@ class AsyncDispatcher:
             "Database", dispatch_retry_base_seconds, database_retry_cap_seconds, monotonic
         )
         self._sweep_clock = _SweepClock(sweep_interval_seconds, monotonic)
+        self._heartbeat_clock = _SweepClock(heartbeat_interval_seconds, monotonic)
         self._wall_clock = wall_clock
         self._stop = asyncio.Event()
         # See the sync dispatcher: stranded claims are retried, not left to the sweep.
@@ -533,13 +569,33 @@ class AsyncDispatcher:
         _log_sweep(result)
         return result
 
+    async def maybe_heartbeat(self) -> bool:
+        """Write readiness on a bounded cadence without making dispatch depend on it."""
+        if not self._heartbeat_clock.due():
+            return False
+        heartbeat = getattr(self.backend, "heartbeat", None)
+        if heartbeat is None:
+            return False
+        try:
+            await heartbeat()
+        except Exception:
+            logger.warning(
+                "Dewey async dispatcher heartbeat failed; dispatch continues",
+                exc_info=True,
+            )
+            return False
+        return True
+
     # --- the loop ---
 
     async def run(self, *, max_iterations: int | None = None) -> None:
         """Dispatch until :meth:`stop` is called, or the task is cancelled."""
         logger.info(
-            "Dewey async dispatcher starting (batch_size=%d idle_poll=%.1fs "
-            "recovery_sweep=%s retry_scheduling=direct)",
+            "Dewey async dispatcher starting (instance=%s database=%s queues=%s "
+            "batch_size=%d idle_poll=%.1fs recovery_sweep=%s retry_scheduling=direct)",
+            getattr(self.backend, "instance_id", "unreported"),
+            getattr(self.backend, "database_identity", "unreported"),
+            getattr(self.backend, "queues", None) or "all",
             self.batch_size,
             self.idle_poll_seconds,
             f"{self.sweep_interval_seconds}s" if self.sweep_interval_seconds else "disabled",
@@ -556,6 +612,7 @@ class AsyncDispatcher:
                 try:
                     # Match the sync loop: the sweep runs even while a stranded
                     # release pauses claiming, because recovery must not stop with it.
+                    await self.maybe_heartbeat()
                     await self.maybe_sweep()
                     if not release_ready:
                         # Match the sync loop: never accumulate fresh claims while rows

@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
+from dewey.core.heartbeat import DEFAULT_HEARTBEAT_STALE_SECONDS, DispatcherHeartbeat
 from dewey.core.states import TaskStatus
 from dewey.core.types import TaskEntry
 from dewey.sqlalchemy.listen import notify_work_available
-from dewey.sqlalchemy.models import TaskEntryModel
+from dewey.sqlalchemy.models import DispatcherHeartbeatModel, TaskEntryModel
 
 
 def _to_dataclass(row: TaskEntryModel) -> TaskEntry:
@@ -43,6 +44,40 @@ def _to_dataclass(row: TaskEntryModel) -> TaskEntry:
 
 def _to_list(rows: Sequence[TaskEntryModel]) -> list[TaskEntry]:
     return [_to_dataclass(r) for r in rows]
+
+
+def get_dispatchers(
+    session: Session,
+    *,
+    database: str | None = None,
+    queues: Sequence[str] | None = None,
+    fresh_within_seconds: float = DEFAULT_HEARTBEAT_STALE_SECONDS,
+    now: datetime | None = None,
+) -> list[DispatcherHeartbeat]:
+    """Fresh dispatchers matching the requested database identity and queues."""
+    observed_at = now or datetime.now(UTC)
+    stmt = select(DispatcherHeartbeatModel).where(
+        DispatcherHeartbeatModel.last_seen_at
+        >= observed_at - timedelta(seconds=fresh_within_seconds)
+    )
+    if database is not None:
+        stmt = stmt.where(DispatcherHeartbeatModel.database == database)
+    rows = session.execute(stmt.order_by(DispatcherHeartbeatModel.last_seen_at.desc())).scalars()
+    requested = tuple(queues) if queues else None
+    result = []
+    for row in rows:
+        heartbeat = DispatcherHeartbeat(
+            instance_id=row.instance_id,
+            dewey_version=row.dewey_version,
+            backend=row.backend,
+            database=row.database,
+            queues=tuple(row.queues) if row.queues is not None else None,
+            started_at=row.started_at,
+            last_seen_at=row.last_seen_at,
+        )
+        if heartbeat.serves(requested):
+            result.append(heartbeat)
+    return result
 
 
 # --- Stats ---

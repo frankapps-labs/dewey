@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import cast
 
 from django.db import connection, connections, models, transaction
 from django.db.models.functions import Coalesce
 
+from dewey import __version__
+from dewey.core.heartbeat import DEFAULT_HEARTBEAT_RETENTION_DAYS
 from dewey.core.states import TaskStatus
-from dewey.django.models import TaskEntry
+from dewey.django.models import DispatcherHeartbeat, TaskEntry
 from dewey.django.sweep import (
     DEFAULT_DISPATCH_TIMEOUT_SECONDS,
     DEFAULT_STUCK_THRESHOLD_MINUTES,
@@ -53,6 +56,8 @@ class DjangoDispatchBackend:
         self.using = using
         self._listener = SyncWorkListener(self._raw_connection, channel=channel)
         self._listener_opened = False
+        self.instance_id = str(uuid.uuid4())
+        self.started_at = datetime.now(UTC)
 
     # --- claim / release ---
 
@@ -146,6 +151,24 @@ class DjangoDispatchBackend:
             using=self.using,
         )
 
+    # --- readiness ---
+
+    def heartbeat(self) -> None:
+        now = datetime.now(UTC)
+        DispatcherHeartbeat.objects.using(self.using).update_or_create(
+            instance_id=self.instance_id,
+            defaults={
+                "dewey_version": __version__,
+                "backend": "django",
+                "database": self.using,
+                "queues": self.queues,
+                "started_at": self.started_at,
+                "last_seen_at": now,
+            },
+        )
+        cutoff = now - timedelta(days=DEFAULT_HEARTBEAT_RETENTION_DAYS)
+        DispatcherHeartbeat.objects.using(self.using).filter(last_seen_at__lt=cutoff).delete()
+
     # --- wake-up ---
 
     def wait_for_work(self, timeout: float) -> bool:
@@ -163,6 +186,12 @@ class DjangoDispatchBackend:
         return False
 
     def close(self) -> None:
+        try:
+            DispatcherHeartbeat.objects.using(self.using).filter(
+                instance_id=self.instance_id
+            ).delete()
+        except Exception:
+            logger.warning("Could not remove dispatcher heartbeat", exc_info=True)
         self._listener.close()
 
     def _raw_connection(self):

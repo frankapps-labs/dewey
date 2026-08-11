@@ -8,10 +8,11 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dewey.core.heartbeat import DEFAULT_HEARTBEAT_STALE_SECONDS, DispatcherHeartbeat
 from dewey.core.states import TaskStatus
 from dewey.core.types import TaskEntry
 from dewey.sqlalchemy.listen import notify_work_available_async
-from dewey.sqlalchemy.models import TaskEntryModel
+from dewey.sqlalchemy.models import DispatcherHeartbeatModel, TaskEntryModel
 
 
 def _to_dataclass(row: TaskEntryModel) -> TaskEntry:
@@ -43,6 +44,40 @@ def _to_dataclass(row: TaskEntryModel) -> TaskEntry:
 
 def _to_list(rows: Sequence[TaskEntryModel]) -> list[TaskEntry]:
     return [_to_dataclass(r) for r in rows]
+
+
+async def get_dispatchers_async(
+    session: AsyncSession,
+    *,
+    database: str | None = None,
+    queues: Sequence[str] | None = None,
+    fresh_within_seconds: float = DEFAULT_HEARTBEAT_STALE_SECONDS,
+    now: datetime | None = None,
+) -> list[DispatcherHeartbeat]:
+    """Fresh dispatchers matching the requested database identity and queues."""
+    observed_at = now or datetime.now(UTC)
+    stmt = select(DispatcherHeartbeatModel).where(
+        DispatcherHeartbeatModel.last_seen_at
+        >= observed_at - timedelta(seconds=fresh_within_seconds)
+    )
+    if database is not None:
+        stmt = stmt.where(DispatcherHeartbeatModel.database == database)
+    result = await session.execute(stmt.order_by(DispatcherHeartbeatModel.last_seen_at.desc()))
+    requested = tuple(queues) if queues else None
+    heartbeats = []
+    for row in result.scalars():
+        heartbeat = DispatcherHeartbeat(
+            instance_id=row.instance_id,
+            dewey_version=row.dewey_version,
+            backend=row.backend,
+            database=row.database,
+            queues=tuple(row.queues) if row.queues is not None else None,
+            started_at=row.started_at,
+            last_seen_at=row.last_seen_at,
+        )
+        if heartbeat.serves(requested):
+            heartbeats.append(heartbeat)
+    return heartbeats
 
 
 # --- Stats ---

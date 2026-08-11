@@ -23,6 +23,7 @@ _LAZY: dict[str, str] = {
     "get_stats": "dewey.django.queries",
     "get_pending": "dewey.django.queries",
     "get_dispatching": "dewey.django.queries",
+    "get_dispatchers": "dewey.django.queries",
     "get_processing": "dewey.django.queries",
     "get_stuck": "dewey.django.queries",
     "get_failed": "dewey.django.queries",
@@ -51,6 +52,9 @@ if TYPE_CHECKING:  # re-exported for type checkers and IDE completion
     )
     from dewey.django.queries import (
         get_dead as get_dead,
+    )
+    from dewey.django.queries import (
+        get_dispatchers as get_dispatchers,
     )
     from dewey.django.queries import (
         get_dispatching as get_dispatching,
@@ -109,6 +113,7 @@ __all__ = [
     "create_or_get_task",
     "create_task",
     "get_dead",
+    "get_dispatchers",
     "get_dispatching",
     "get_expired",
     "get_failed",

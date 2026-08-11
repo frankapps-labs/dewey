@@ -7,13 +7,47 @@ from datetime import UTC, datetime, timedelta
 from django.db import transaction
 from django.db.models import Count
 
+from dewey.core.heartbeat import DEFAULT_HEARTBEAT_STALE_SECONDS
+from dewey.core.heartbeat import DispatcherHeartbeat as HeartbeatDC
 from dewey.core.states import TaskStatus
 from dewey.core.types import TaskEntry as TaskEntryDC
-from dewey.django.models import TaskEntry, resolve_db_alias
+from dewey.django.models import DispatcherHeartbeat, TaskEntry, resolve_db_alias
 
 
 def _to_list(qs) -> list[TaskEntryDC]:
     return [obj.to_dataclass() for obj in qs]
+
+
+def get_dispatchers(
+    *,
+    using: str = "default",
+    database: str | None = None,
+    queues: list[str] | tuple[str, ...] | None = None,
+    fresh_within_seconds: float = DEFAULT_HEARTBEAT_STALE_SECONDS,
+    now: datetime | None = None,
+) -> list[HeartbeatDC]:
+    """Fresh dispatchers matching the requested database identity and queues."""
+    observed_at = now or datetime.now(UTC)
+    qs = DispatcherHeartbeat.objects.using(using).filter(
+        last_seen_at__gte=observed_at - timedelta(seconds=fresh_within_seconds)
+    )
+    if database is not None:
+        qs = qs.filter(database=database)
+    requested = tuple(queues) if queues else None
+    result = []
+    for row in qs.order_by("-last_seen_at"):
+        heartbeat = HeartbeatDC(
+            instance_id=row.instance_id,
+            dewey_version=row.dewey_version,
+            backend=row.backend,
+            database=row.database,
+            queues=tuple(row.queues) if row.queues is not None else None,
+            started_at=row.started_at,
+            last_seen_at=row.last_seen_at,
+        )
+        if heartbeat.serves(requested):
+            result.append(heartbeat)
+    return result
 
 
 # --- Stats ---
