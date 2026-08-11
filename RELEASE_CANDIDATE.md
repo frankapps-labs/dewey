@@ -1,7 +1,8 @@
 # Dewey 0.5.0 — release candidate report
 
-**Status:** implementation complete; integrated critical review and final exact-head gate
-capture pending.
+**Status:** BLOCKED at the mandatory independent critical-review gate. Implementation,
+local review/repair, installed-wheel proof, and release gates are complete; the bounded
+Claude reviewer was unavailable because its subscription session limit was exhausted.
 **Branch:** `feat/dewey-0.5-first-integration`
 **Base:** `847b6c428dfea01240b1d8f93adbed30d86fc191` (`origin/main` at start)
 **Release boundary:** no merge, tag, TestPyPI/PyPI upload, or downstream integration.
@@ -40,13 +41,13 @@ helpers/models, `dewey.contrib.django_huey`, `WORKER_DATABASE`, and `dewey_docto
 all persisted immutable execution inputs do. Active `PROCESSING` handlers are never expired
 out from under execution.
 
-## Evidence captured before critical review
+## Gate evidence
 
 | Gate | Current evidence |
 |---|---|
 | lint / format / typecheck | pass |
-| full local PostgreSQL suite | 592 passed, 93% coverage |
-| compose-equivalent PostgreSQL/Redis suite | 592 passed using existing Dewey compose services; worktree `make up` itself hit the already-allocated standard ports |
+| full local PostgreSQL suite | 597 passed, 93% coverage |
+| compose-equivalent PostgreSQL/Redis suite | 596 passed at implementation head using existing Dewey compose services; worktree `make up` itself hit the already-allocated standard ports |
 | Django 4.2.24 lane | 172 focused Django/contrib/readiness/idempotency tests passed |
 | current Django lane | full suite passed on Django 6.0.7 |
 | Huey 2.5.5 lane | 28 adapter/contrib tests passed |
@@ -57,8 +58,28 @@ out from under execution.
 | optional imports | isolated core/SQLAlchemy/async/Django/Huey/contrib matrix passed |
 | installed wheel | real PostgreSQL/Redis smoke passed: contrib dispatch, producer rollback, broker recovery, direct retry, expiry, idempotency conflict, doctor heartbeat readiness, real Huey queue |
 
-These are pre-review results, not the terminal exact-head gate table. The final section is
-updated only after the integrated review/fix pass and final committed-SHA verification.
+Evidence/code head before this report-only status update:
+`3142413fe226f3a2bfedbb436a96b6de968ec0d7`.
+
+## Critical review
+
+A fresh independent Opus reviewer was requested on the integrated exact head and failed to
+start because the Claude subscription session limit was exhausted. No model transcript is
+committed. The main OpenAI orchestrator completed a bounded critical audit and one repair
+pass, fixing:
+
+- a zero-second earliest-due wait that could hot-loop while another dispatcher held the
+  visible row under `SKIP LOCKED`;
+- doctor incorrectly accepting a queue-scoped heartbeat as readiness for all queues;
+- system checks omitting the router-selected producer backend;
+- unbounded stale-heartbeat cleanup work per beat;
+- missing real-PostgreSQL concurrency proofs for due-retry and expiry claim races; and
+- installed-wheel retry proof that previously forced the due timestamp instead of measuring
+  policy timing independently from a disabled/long recovery sweep.
+
+Focused verification and the full suite pass after those repairs. The frozen task packet
+still requires independent cross-vendor review and one focused fix verification, so this
+report deliberately does **not** claim `RELEASE_CANDIDATE_READY_FOR_OPERATOR`.
 
 ## Compatibility and limitations
 
@@ -72,11 +93,12 @@ updated only after the integrated review/fix pass and final committed-SHA verifi
 - Dewey still does not enforce hard handler timeouts, provide cron scheduling, or make
   handler side effects idempotent.
 
-## Operator gates remaining
+## Gates remaining
 
-1. Complete critical cross-vendor review, one repair pass, and focused verification.
-2. Run all mandatory gates on the final committed SHA and replace this provisional table.
-3. Review and merge the PR; rerun on the merge SHA if it differs.
-4. Approve the changelog date and create `v0.5.0`.
-5. Verify the trusted publish workflow and PyPI artifacts.
-6. Ask the first integrator to rerun their installed-wheel integration suite against 0.5.0.
+1. When reviewer capacity resets, run the mandatory fresh independent critical review on the
+   then-current exact head; repair verified findings once and run focused/full verification.
+2. Push/open or update the PR, then human-review and merge it; rerun on the merge SHA if it
+   differs.
+3. Approve the changelog date and create `v0.5.0`.
+4. Verify the trusted publish workflow and PyPI artifacts.
+5. Ask the first integrator to rerun their installed-wheel integration suite against 0.5.0.
