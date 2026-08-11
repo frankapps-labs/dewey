@@ -1,4 +1,4 @@
-.PHONY: help install test test-cov test-integration lint typecheck format format-check up down wheel-smoke clean build publish-test publish release ci setup
+.PHONY: help install test test-cov test-integration lint typecheck format format-check up down wheel-smoke optional-import-matrix clean build publish-test publish release ci setup
 
 PACKAGE := src/dewey
 
@@ -21,6 +21,7 @@ help:
 	@echo "  make format-check  Check formatting without writing"
 	@echo "  make test-integration  Run the suite against the compose containers"
 	@echo "  make wheel-smoke   Build a wheel and exercise it in a clean venv"
+	@echo "  make optional-import-matrix  Prove core/extras imports in isolated venvs"
 	@echo ""
 	@echo "Building & Publishing:"
 	@echo "  make clean         Remove build artifacts"
@@ -57,6 +58,9 @@ wheel-smoke: build
 	DEWEY_TEST_DATABASE_URL=$(COMPOSE_DB) \
 	DEWEY_TEST_REDIS_URL=$(COMPOSE_REDIS) \
 	./scripts/wheel_smoke.sh
+
+optional-import-matrix: build
+	./scripts/optional_import_matrix.sh
 
 test-cov:
 	uv run pytest --cov=dewey --cov-report=term-missing --cov-report=html

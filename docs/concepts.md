@@ -20,9 +20,10 @@ destroying it.
 ```text
 PENDING ──► DISPATCHING ──► PROCESSING ──► COMPLETED
    ▲             │               │
-   │             │               ├──► FAILED ──► PENDING   (retry, after backoff)
-   │             │               │         └───► DEAD      (attempts exhausted)
-   └─────────────┴───────────────┘                          (timeout sweep)
+   │             │               ├──► FAILED ──► DISPATCHING (direct when due)
+   │             │               │         └───► DEAD        (budget spent)
+   └─────────────┴───────────────┘                            (recovery)
+     └──────────────► EXPIRED ◄──────────────┘                (before start)
 ```
 
 | State | Meaning | How it leaves |
@@ -31,12 +32,13 @@ PENDING ──► DISPATCHING ──► PROCESSING ──► COMPLETED
 | `DISPATCHING` | Claimed and handed to the transport; no worker has started it. | A worker starts it, dispatch failed and it returns to `PENDING`, or the timeout sweep reclaims it. |
 | `PROCESSING` | A worker is running the handler. | Handler returns, raises, or the worker dies and the stuck sweep reclaims it. |
 | `COMPLETED` | Terminal. | Nothing. |
-| `FAILED` | Failed, retry scheduled at `scheduled_for`. | The sweep returns it to `PENDING`, or dead-letters it once attempts are spent. |
+| `FAILED` | Failed, retry scheduled at `scheduled_for`. | A dispatcher claims it directly when due, recovery may return it to `PENDING`, or it becomes `DEAD` once attempts are spent. |
 | `DEAD` | Terminal until a human intervenes. | Manual retry (`DEAD → PENDING`). |
+| `EXPIRED` | Its absolute start deadline passed before handler invocation. | Nothing; create a new task if the work is still wanted. |
 
-`PENDING → PROCESSING` stays legal so that in-process execution — no broker in the path
-— and manual retry both work. Terminal rows are never redispatched, and `FAILED` is only
-ever redispatched by way of `PENDING`.
+`PENDING → PROCESSING` stays legal for in-process execution. Terminal rows are never
+redispatched. `now == expires_at` is expired; expiry consumes no handler attempt. Once a
+row is `PROCESSING`, Dewey does not expire it out from under a running handler.
 
 ## Why `DISPATCHING` exists
 
@@ -55,7 +57,9 @@ The claim is what makes concurrent dispatchers safe:
 
 ```sql
 SELECT id FROM task_entries
-WHERE status = 'pending' AND (scheduled_for IS NULL OR scheduled_for <= now())
+WHERE (status = 'pending' OR (status = 'failed' AND attempts < max_attempts))
+  AND (scheduled_for IS NULL OR scheduled_for <= now())
+  AND (expires_at IS NULL OR expires_at > now())
 ORDER BY priority DESC, COALESCE(scheduled_for, created_at) ASC, created_at ASC
 LIMIT 100
 FOR UPDATE SKIP LOCKED;
@@ -133,7 +137,8 @@ The sweep is the recovery pass, and the dispatcher runs it on `sweep_interval_se
 
 | Pass | Finds | Does |
 |---|---|---|
-| `sweep_failed` | `FAILED` rows whose `scheduled_for` has passed | Returns them to `PENDING`, or `DEAD` if attempts are spent |
+| `sweep_expired` | waiting/dispatching rows whose `expires_at` passed | Moves them to terminal `EXPIRED`; never touches active `PROCESSING` handlers |
+| `sweep_failed` | due `FAILED` rows not already claimed directly | Recovery fallback to `PENDING`, or `DEAD` if attempts are spent |
 | `sweep_dispatching` | `DISPATCHING` rows older than `dispatch_timeout_seconds` | Returns them to `PENDING` |
 | `sweep_stuck` | `PROCESSING` rows older than `stuck_threshold_minutes` | Returns them to `PENDING` |
 
@@ -147,9 +152,9 @@ stuck sweep cannot tell a slow handler from a dead worker. Set the threshold bel
 real runtime and a handler that is still working is presumed abandoned: the row returns
 to `PENDING` and the task runs a second time, concurrently with the first.
 
-Because `FAILED → PENDING` is a sweep transition, **nothing retries unless something
-runs the sweep.** The dispatcher owning that tick means one process to operate rather
-than two; the functions stay public if you would rather drive them from cron.
+Ordinary retries do not wait for this interval: due `FAILED` rows are claimable directly,
+and the dispatcher bounds its wait by the earliest scheduled retry or expiry. A dispatcher
+is still required, and disabling the sweep disables crash recovery—not retry timing.
 
 ## Wake-up
 
@@ -185,9 +190,14 @@ message naming the offending position — pass an ID and let the handler load it
 ## Idempotency
 
 An `idempotency_key` is unique per `(task_type, idempotency_key)`. Postgres treats
-`NULL`s as distinct, so unkeyed tasks never collide with each other. Derive the key from
-a domain command ID and a duplicate producer call becomes an `IntegrityError` you can
-catch rather than a second delivery.
+`NULL`s as distinct, so unkeyed tasks never collide. `create_task()` keeps its compatible
+`IntegrityError` behaviour. `create_or_get_task()` requires a key and returns the existing
+row only when the post-serialization/default-resolution creation contract matches: task
+type, args, kwargs, queue, priority, max attempts, original schedule, and expiry. Metadata
+is excluded because it is operational context, not execution definition. Conflicting reuse
+raises `IdempotencyConflictError` naming differing fields without payload values. A
+savepoint preserves the caller's surrounding business transaction when concurrent creators
+race.
 
 Handlers should still be idempotent. Duplicate *transport* delivery is already harmless
 — the claim is atomic and a redelivered ID is a logged no-op — but a worker killed

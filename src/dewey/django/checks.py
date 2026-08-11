@@ -48,10 +48,19 @@ def check_dewey_configuration(app_configs=None, **kwargs):
                 )
             )
 
-    try:
-        get_dispatch_fn()
-    except Exception as exc:
-        findings.append(Error(str(exc), id="dewey.E004"))
+    if not config["DISPATCH"]:
+        findings.append(
+            Warning(
+                "DEWEY['DISPATCH'] is not set; producers can migrate/create rows, but "
+                "a dispatcher cannot start until a module-level callable is configured.",
+                id="dewey.W003",
+            )
+        )
+    else:
+        try:
+            get_dispatch_fn()
+        except Exception as exc:
+            findings.append(Error(str(exc), id="dewey.E004"))
 
     sweep_interval = config["SWEEP_INTERVAL_SECONDS"]
     if sweep_interval is None:

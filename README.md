@@ -110,6 +110,11 @@ def dispatch(task_id: str):
     return adapter.dispatch(task_id)   # DEWEY = {"DISPATCH": "myapp.tasks.dispatch"}
 ```
 
+Check the active setup and dispatcher readiness with `python manage.py dewey_doctor`
+(or `--format json` for monitoring/CI). It validates configuration and schema, reports
+what the in-process handler registry can and cannot prove, and fails closed without a
+fresh database-backed dispatcher heartbeat.
+
 That is the whole loop. SQLAlchemy — sync and async — works the same way; see
 [docs/getting-started.md](https://github.com/frankapps-labs/dewey/blob/main/docs/getting-started.md).
 
@@ -127,7 +132,11 @@ That is the whole loop. SQLAlchemy — sync and async — works the same way; se
 - **A queryable backlog.** `SELECT count(*) FROM task_entries WHERE status = 'pending'`
   is the answer, not a Redis introspection script.
 - **Duplicate delivery is harmless.** Claims are atomic, so a redelivered task ID is a
-  logged no-op.
+  logged no-op. Producers that need request idempotency can use `create_or_get_task()`;
+  conflicting reuse raises `IdempotencyConflictError` without logging argument values.
+- **Deadlines are native.** `expires_at` is an absolute aware timestamp. Dewey records
+  `EXPIRED` before dispatch and again before handler invocation, without consuming an
+  attempt; `now == expires_at` is expired.
 - **An audit trail**: attempts, errors, timestamps and correlation metadata per row.
 
 ## How it fits together
@@ -151,9 +160,10 @@ The state machine:
 ```text
 PENDING ──► DISPATCHING ──► PROCESSING ──► COMPLETED
    ▲             │               │
-   │             │               ├──► FAILED ──► PENDING   (retry, after backoff)
-   │             │               │         └───► DEAD      (attempts exhausted)
-   └─────────────┴───────────────┘                          (timeout sweep)
+   │             │               ├──► FAILED ──► DISPATCHING (direct retry when due)
+   │             │               │         └───► DEAD        (attempts exhausted)
+   └─────────────┴───────────────┘                            (recovery sweep)
+     └──────────────► EXPIRED ◄──────────────┘                (deadline before start)
 ```
 
 `PENDING → PROCESSING` is also legal, for in-process execution with no broker in the
@@ -161,8 +171,9 @@ path. `DEAD → PENDING` is a manual retry.
 
 ## Operational notes
 
-- **The dispatcher must be running for retries to happen.** `FAILED → PENDING` is a
-  sweep transition, and the dispatcher owns the sweep tick.
+- **The dispatcher must be running for retries to happen.** Due `FAILED` rows are
+  claimed directly and the dispatcher wakes at the earliest known retry/schedule; the
+  periodic sweep is crash recovery, not ordinary retry scheduling.
 - **Polling is the correctness path; LISTEN is an optimisation.** The dispatcher polls
   regardless, which is what recovers missed notifications and newly-due scheduled work.
 - **`dispatch_timeout_seconds` must exceed your worst-case broker backlog**, or work

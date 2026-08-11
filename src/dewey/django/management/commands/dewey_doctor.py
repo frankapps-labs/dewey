@@ -36,6 +36,12 @@ class Command(BaseCommand):
 
         try:
             config = get_settings()
+            if not config["DISPATCH"]:
+                add(
+                    "dewey.doctor.dispatch",
+                    "error",
+                    "DEWEY['DISPATCH'] is required for dispatcher readiness.",
+                )
             alias = config["DATABASE"]
             connection = connections[alias]
             connection.ensure_connection()

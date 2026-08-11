@@ -155,9 +155,9 @@ Producers keep writing on the business alias; reserve dedicated aliases for the
 dispatcher (`DEWEY["DATABASE"]`) and worker (`DEWEY["WORKER_DATABASE"]`), which run
 after commit anyway.
 
-**A dispatcher has to be running.** It is a new process to deploy alongside your worker,
-and it is what makes retries happen at all — `FAILED → PENDING` is a sweep transition and
-the dispatcher owns the sweep tick.
+**A dispatcher has to be running.** It is a new process beside the worker. Due retries are
+claimed directly and wake pacing follows the earliest due row; the dispatcher's periodic
+sweep remains the recovery path for abandoned dispatching/processing work.
 
 **There is no `.delay()`.** Deliberately: it is what re-couples producers to worker
 imports. If you want type safety at the call site, wrap it yourself —

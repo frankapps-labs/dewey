@@ -2,6 +2,20 @@
 
 Status legend: `[ ]` not started, `[~]` in progress, `[x]` done.
 
+## 0.5.0 first-integration hardening
+
+- [x] Correct module-level Django dispatch imports and producer/dispatcher/worker alias
+      semantics.
+- [x] Ship first-class Django/Huey wiring with `close_db` and worker alias support.
+- [x] Make due retries directly claimable with earliest-due wake pacing.
+- [x] Add expiry state/schema/enforcement and race-safe idempotent creation across ORM paths.
+- [x] Add dispatcher heartbeats, Django checks, and active doctor/JSON readiness.
+- [x] Extend installed-wheel proof, supported-version lanes, optional-extra matrix, migration
+      upgrade proof, and public release documentation.
+- [ ] Run critical integrated review, repair once, and capture every gate on one exact SHA.
+- [ ] Human review/merge approval, changelog date, `v0.5.0` tag, and publication remain
+      operator-only; no release command runs from the candidate branch.
+
 ## Phase 0 — Decisions and naming
 
 - [x] Package name is final: `dewey`.
@@ -253,5 +267,5 @@ sustained insert pressure.
 - [ ] Cut over a production task type, one at a time, after publishing. Deliberately
       after: the point of publishing 0.x is to learn from real usage, and the
       pre-release validation above is what makes that safe to start.
-- [ ] Tag/publish `0.4.0` once a human approves the release-candidate report.
+- [ ] Tag/publish `0.5.0` only after a human approves the exact-head release-candidate report.
 - [ ] Promote to `1.0` only after real production usage proves the API stable.

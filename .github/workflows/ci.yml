@@ -202,6 +202,9 @@ jobs:
         run: |
           python -m zipfile -l dist/*.whl
 
+      - name: Run the optional-extra import matrix
+        run: ./scripts/optional_import_matrix.sh
+
       - name: Run the installed-wheel smoke test
         run: ./scripts/wheel_smoke.sh
 

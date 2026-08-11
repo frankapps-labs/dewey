@@ -90,7 +90,9 @@ dispatcher never imports your handlers — only the adapter wiring.
 
 `register()` registers the Huey task with `retries=0`, deliberately. Two retry engines
 over one task is how work runs twice and how attempt counters stop meaning anything.
-Dewey schedules retries via `scheduled_for` and the sweep; Huey just delivers.
+Dewey schedules retries via `scheduled_for`; dispatchers claim due `FAILED` rows directly
+and pace their wake-up to the earliest due work. The sweep is crash recovery. Huey just
+delivers.
 
 ### What a broker outage looks like
 

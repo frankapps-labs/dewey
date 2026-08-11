@@ -64,6 +64,8 @@ def configure_django() -> None:
     import django
     from django.conf import settings
 
+    from huey import MemoryHuey
+
     settings.configure(
         DATABASES={
             "default": {
@@ -78,7 +80,8 @@ def configure_django() -> None:
         INSTALLED_APPS=["dewey.django"],
         USE_TZ=True,
         DEFAULT_AUTO_FIELD="django.db.models.BigAutoField",
-        DEWEY={"DISPATCH": "wheel_smoke.dispatch"},
+        HUEY=MemoryHuey("dewey-contrib-smoke", immediate=True),
+        DEWEY={"DISPATCH": "dewey.contrib.django_huey.dispatch"},
     )
     django.setup()
 
@@ -115,6 +118,9 @@ def main() -> int:
     recreate_database()
     configure_django()
 
+    import json
+    from io import StringIO
+
     from django.core.management import call_command
     from django.db import transaction
 
@@ -127,7 +133,9 @@ def main() -> int:
     import dewey
     from dewey.dispatcher import Dispatcher
     from dewey.django.dispatch import DjangoDispatchBackend
-    from dewey.django.executor import create_task
+    from dewey.contrib.django_huey import dispatch as contrib_dispatch
+    from dewey.django.executor import create_or_get_task, create_task
+    from dewey.errors import IdempotencyConflictError
 
     @dewey.task("smoke.notify", max_attempts=3, backoff=dewey.Constant(1))
     def notify(command_id: int) -> None:
@@ -137,9 +145,12 @@ def main() -> int:
     def always_fails(command_id: int) -> None:
         raise dewey.TransientError("recipient unavailable")
 
-    build_transport(immediate=True)
     backend = DjangoDispatchBackend()
-    dispatcher = Dispatcher(backend, dispatch, sweep_interval_seconds=None)
+    dispatcher = Dispatcher(backend, contrib_dispatch, sweep_interval_seconds=None)
+    check(
+        "preferred contrib dispatch is module-level",
+        callable(__import__("dewey.django.conf", fromlist=["get_dispatch_fn"]).get_dispatch_fn()),
+    )
 
     print("--> happy path: create, dispatch, process, complete")
     with transaction.atomic():
@@ -154,7 +165,7 @@ def main() -> int:
 
     print("--> duplicate delivery is harmless")
     processed.clear()
-    dispatch(task.id)
+    contrib_dispatch(task.id)
     check("handler did not run again", processed == [], f"got {processed}")
 
     print("--> rolled-back producer leaves nothing to dispatch")
@@ -169,8 +180,6 @@ def main() -> int:
     check("nothing to claim", backend.claim(10) == [])
 
     print("--> broker outage: work waits in Postgres, then dispatches on recovery")
-    build_transport(immediate=True)
-    working_adapter = adapter
 
     def broken_dispatch(task_id: str) -> None:
         raise ConnectionError("redis is unreachable")
@@ -184,8 +193,7 @@ def main() -> int:
     check("outage did not burn an attempt", row.attempts == 0, f"attempts={row.attempts}")
 
     processed.clear()
-    adapter = working_adapter
-    recovered = Dispatcher(backend, dispatch, sweep_interval_seconds=None)
+    recovered = Dispatcher(backend, contrib_dispatch, sweep_interval_seconds=None)
     check("dispatches after recovery", recovered.dispatch_batch() == 1)
     check("handler ran once recovered", processed == [(7,)], f"got {processed}")
 
@@ -200,12 +208,53 @@ def main() -> int:
     TaskEntry.objects.filter(id=failing.id).update(
         scheduled_for=datetime.now(UTC) - timedelta(seconds=1)
     )
-    sweep_result = backend.run_sweep()
-    check("sweep makes it eligible again", failing.id in sweep_result["failed"])
+    # A due retry is directly claimable; the 60-second recovery sweep is not in
+    # the latency path.
     recovered.dispatch_batch()
     row = TaskEntry.objects.get(id=failing.id)
     check("dead-letters once the budget is spent", row.status == "dead", f"status={row.status}")
     check("dead task is queryable with its error", "unavailable" in row.error)
+
+    print("--> expiry and idempotent creation")
+    expired = create_task(
+        task_type="smoke.notify",
+        args=[404],
+        expires_at=datetime.now(UTC) - timedelta(seconds=1),
+    )
+    processed.clear()
+    check("expired task is not dispatched", recovered.dispatch_batch() == 0)
+    expired_row = TaskEntry.objects.get(id=expired.id)
+    check("expired task is auditable", expired_row.status == "expired")
+    check("expiry consumes no attempt", expired_row.attempts == 0)
+    first = create_or_get_task(
+        task_type="smoke.notify",
+        idempotency_key="smoke-idempotent-001",
+        args=[55],
+    )
+    same = create_or_get_task(
+        task_type="smoke.notify",
+        idempotency_key="smoke-idempotent-001",
+        args=[55],
+    )
+    check("identical idempotent creation returns one task", first.id == same.id)
+    try:
+        create_or_get_task(
+            task_type="smoke.notify",
+            idempotency_key="smoke-idempotent-001",
+            args=[56],
+        )
+    except IdempotencyConflictError as exc:
+        check("conflicting key is typed and redacted", exc.differing_fields == ("args",))
+    else:
+        check("conflicting key is typed and redacted", False)
+    recovered.dispatch_batch()  # drain the one idempotent task before the Redis leg
+
+    print("--> doctor sees a fresh dispatcher heartbeat")
+    backend.heartbeat()
+    doctor_output = StringIO()
+    call_command("dewey_doctor", "--format", "json", stdout=doctor_output)
+    doctor = json.loads(doctor_output.getvalue())
+    check("doctor JSON reports ready", doctor["ok"] is True)
 
     print("--> real Redis round trip through a Huey consumer")
     processed.clear()

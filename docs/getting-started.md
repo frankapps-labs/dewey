@@ -149,11 +149,17 @@ def dispatch(task_id: str):
 
 ```python
 from django.db import transaction
-from dewey.django import create_task
+from datetime import UTC, datetime, timedelta
+from dewey.django import create_or_get_task
 
 with transaction.atomic():
     command = Command.objects.create(...)
-    create_task(task_type="agent.notify", args=[str(command.id)])
+    create_or_get_task(
+        task_type="agent.notify",
+        idempotency_key=f"notify:{command.id}",
+        args=[str(command.id)],
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
 ```
 
 If the block rolls back, the task row and its wake-up go with it. Postgres holds the
@@ -170,7 +176,21 @@ python manage.py run_huey              # processes task IDs
 Both are ordinary long-running processes. Run more than one dispatcher if you like:
 `SKIP LOCKED` makes them cooperate without a leader election.
 
-Useful flags while getting oriented:
+Before calling the deployment ready, run the active doctor. Human output is the default;
+JSON has stable finding IDs and exits non-zero on readiness errors:
+
+```bash
+python manage.py dewey_doctor
+python manage.py dewey_doctor --format json --queues critical,default
+```
+
+It verifies configuration, PostgreSQL/schema/migrations, the importable dispatch callable,
+the current process's handler/processor registration shape, aliases/recovery settings, and
+a fresh matching dispatcher heartbeat. Without an expected-task manifest it cannot prove
+that every intended handler was imported, and one process cannot inspect another worker's
+in-memory registry; the output says so.
+
+Useful dispatcher flags while getting oriented:
 
 ```bash
 python manage.py dewey_dispatcher --once                     # one pass, then exit
@@ -198,9 +218,10 @@ DEWEY = {
 A misspelled key raises `ImproperlyConfigured` at startup rather than being silently
 ignored.
 
-> **The dispatcher owns the sweep.** `FAILED → PENDING` is a sweep transition, so with
-> `SWEEP_INTERVAL_SECONDS` set to `None` and nothing else calling `sweep()`, failed
-> tasks never retry.
+> **Retries are direct; sweeps are recovery.** Due `FAILED` rows are claimable without a
+> sweep and the dispatcher wakes for the earliest due row. Setting
+> `SWEEP_INTERVAL_SECONDS=None` disables abandoned-processing/dispatch recovery and is
+> reported by checks/doctor; it does not add ordinary retry latency.
 
 ---
 
@@ -214,6 +235,30 @@ from dewey.sqlalchemy import Base
 
 engine = create_engine("postgresql://localhost/myapp")
 Base.metadata.create_all(engine)  # or generate an Alembic revision from it
+```
+
+`create_all()` does not alter an existing 0.4 table. Prefer generating an Alembic
+revision from 0.5 metadata. The equivalent additive PostgreSQL DDL is:
+
+```sql
+ALTER TABLE task_entries ADD COLUMN IF NOT EXISTS expires_at timestamptz NULL;
+ALTER TABLE task_entries ADD COLUMN IF NOT EXISTS expired_at timestamptz NULL;
+ALTER TABLE task_entries ADD COLUMN IF NOT EXISTS initial_scheduled_for timestamptz NULL;
+CREATE INDEX IF NOT EXISTS ix_task_entries_expires_at ON task_entries (expires_at)
+  WHERE expires_at IS NOT NULL AND status IN ('pending', 'dispatching', 'failed');
+CREATE TABLE IF NOT EXISTS dewey_dispatcher_heartbeats (
+  instance_id varchar(36) PRIMARY KEY,
+  dewey_version varchar(50) NOT NULL,
+  backend varchar(50) NOT NULL,
+  database varchar(200) NOT NULL,
+  queues json NULL,
+  started_at timestamptz NOT NULL,
+  last_seen_at timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_dewey_heartbeats_last_seen
+  ON dewey_dispatcher_heartbeats (last_seen_at);
+CREATE INDEX IF NOT EXISTS ix_dewey_heartbeats_backend_database
+  ON dewey_dispatcher_heartbeats (backend, database);
 ```
 
 ### 2. Declare a task and wire the transport

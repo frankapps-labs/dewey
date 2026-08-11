@@ -134,9 +134,9 @@ class TestSystemChecks:
             ids = {finding.id for finding in check_dewey_configuration()}
         assert "dewey.E001" in ids
 
-    def test_missing_dispatch_is_actionable(self):
+    def test_missing_dispatch_is_actionable_without_blocking_migrations(self):
         ids = {finding.id for finding in check_dewey_configuration()}
-        assert "dewey.E004" in ids
+        assert "dewey.W003" in ids
 
     @override_settings(
         DEWEY={
