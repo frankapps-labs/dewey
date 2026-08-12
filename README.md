@@ -1,5 +1,10 @@
 # Dewey
 
+[![CI](https://github.com/frankapps-labs/dewey/actions/workflows/ci.yml/badge.svg)](https://github.com/frankapps-labs/dewey/actions/workflows/ci.yml)
+[![Coverage Status](https://coveralls.io/repos/github/frankapps-labs/dewey/badge.svg?branch=main)](https://coveralls.io/github/frankapps-labs/dewey?branch=main)
+[![PyPI](https://img.shields.io/pypi/v/dewey.svg)](https://pypi.org/project/dewey/)
+[![Python](https://img.shields.io/pypi/pyversions/dewey.svg)](https://pypi.org/project/dewey/)
+
 **Guaranteed delivery engine for Python.** Postgres is the scheduler and the backlog;
 your broker is just a worker pool.
 

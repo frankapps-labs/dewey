@@ -46,8 +46,8 @@ dmypy.json
 .ruff_cache/
 tmp/
 
-# Local AI agent scaffolding / private session state
-# (public repo should stay tool-agnostic; durable session state lives outside the repo)
+# Local development scaffolding and session state
+# (durable session state lives outside the public repository)
 SESSION.md
 CLAUDE.md
 AGENTS.md
