@@ -306,6 +306,10 @@ with Session(engine) as session:
     session.commit()
 ```
 
+Both `scheduled_for` and `expires_at` must be timezone-aware datetimes; `None` means no
+schedule or deadline. Dewey rejects naive wall-clock values before writing a row or
+sending a work-available notification.
+
 ### 4. Run the dispatcher
 
 ```python
@@ -366,6 +370,10 @@ async with AsyncSession(async_engine) as session:
     await create_task_async(session, task_type="invoice.send", args=[invoice.id])
     await session.commit()
 ```
+
+As with the synchronous producer, `scheduled_for` and `expires_at` must be timezone-aware
+datetimes; `None` means no schedule or deadline. Naive values are rejected before any row
+or work-available notification is written.
 
 An async handler needs an async worker: register a `process_fn` that drives
 `process_task_async` on your loop. Async handlers are awaited by `process_task_async`,
