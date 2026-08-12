@@ -9,6 +9,7 @@ from dewey.sqlalchemy.async_executor import create_task_async
 from dewey.sqlalchemy.async_queries import (
     bulk_retry_async,
     get_dead_async,
+    get_expired_async,
     get_failed_async,
     get_pending_async,
     get_processing_async,
@@ -33,6 +34,7 @@ async def test_get_stats_empty(async_session):
         "completed": 0,
         "failed": 0,
         "dead": 0,
+        "expired": 0,
     }
 
 
@@ -119,6 +121,19 @@ async def test_get_dead(async_session):
 
 
 @pytest.mark.asyncio
+async def test_get_expired(async_session):
+    task = await create_task_async(async_session, task_type="deadline")
+    task.status = TaskStatus.EXPIRED.value
+    task.expires_at = datetime.now(UTC) - timedelta(seconds=2)
+    task.expired_at = datetime.now(UTC) - timedelta(seconds=1)
+    await async_session.flush()
+
+    [result] = await get_expired_async(async_session)
+    assert result.status == TaskStatus.EXPIRED
+    assert result.expired_at is not None
+
+
+@pytest.mark.asyncio
 async def test_get_task(async_session):
     task = await create_task_async(async_session, task_type="scan", kwargs={"x": 1})
     await async_session.commit()
@@ -164,6 +179,16 @@ async def test_retry_failed_task(async_session):
     assert entry.status == TaskStatus.PENDING
     assert entry.attempts == 0
     assert entry.error == ""
+
+
+@pytest.mark.asyncio
+async def test_retry_expired_is_refused(async_session):
+    task = await create_task_async(async_session, task_type="deadline")
+    task.status = TaskStatus.EXPIRED.value
+    await async_session.flush()
+
+    assert await retry_task_async(async_session, task.id) is None
+    assert task.status == TaskStatus.EXPIRED.value
 
 
 @pytest.mark.asyncio

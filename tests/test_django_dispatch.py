@@ -69,16 +69,37 @@ class TestClaim:
         assert backend.claim(2) == [high.id, low.id]
 
     def test_a_due_retry_is_not_starved_by_newer_immediate_work(self, backend):
-        """Immediate and due scheduled work share one effective due-time order.
-
-        A retry that came due a minute ago must beat a task created just now.
-        The old NULLs-first ordering put every fresh immediate task ahead of the
-        whole retry backlog, so steady producer traffic starved retries forever.
-        """
-        retry = create_task(task_type="t", scheduled_for=datetime.now(UTC) - timedelta(minutes=1))
+        """Immediate and due retry work share one effective due-time order."""
+        retry = create_task(task_type="t", max_attempts=3)
+        TaskEntry.objects.filter(id=retry.id).update(
+            status=TaskStatus.FAILED.value,
+            attempts=1,
+            scheduled_for=datetime.now(UTC) - timedelta(minutes=1),
+        )
         fresh = create_task(task_type="t")
 
         assert backend.claim(2) == [retry.id, fresh.id]
+
+    def test_expired_ready_row_is_terminalized_not_dispatched(self, backend):
+        task = create_task(task_type="t")
+        TaskEntry.objects.filter(id=task.id).update(
+            expires_at=datetime.now(UTC) - timedelta(seconds=1)
+        )
+
+        assert backend.claim(10) == []
+        row = TaskEntry.objects.get(id=task.id)
+        assert row.status == TaskStatus.EXPIRED.value
+        assert row.expired_at is not None
+        assert row.attempts == 0
+
+    def test_next_due_uses_an_earlier_expiry(self, backend):
+        now = datetime.now(UTC)
+        task = create_task(task_type="t", scheduled_for=now + timedelta(minutes=5))
+        TaskEntry.objects.filter(id=task.id).update(expires_at=now + timedelta(seconds=10))
+
+        due = backend.next_due()
+        assert due is not None
+        assert abs((due - (now + timedelta(seconds=10))).total_seconds()) < 1
 
     def test_queue_scoping(self):
         create_task(task_type="t", queue="bulk")

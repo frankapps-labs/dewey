@@ -75,8 +75,10 @@ echo "==> Confirming migrations shipped inside the wheel"
 from importlib import resources
 
 files = {path.name for path in resources.files("dewey.django.migrations").iterdir()}
-assert "0001_initial.py" in files, f"migrations missing from the wheel: {sorted(files)}"
-print("    ok dewey.django.migrations/0001_initial.py")
+expected = {"0001_initial.py", "0002_task_expiry_and_dispatcher_heartbeat.py"}
+assert expected <= files, f"migrations missing from the wheel: {sorted(files)}"
+for name in sorted(expected):
+    print(f"    ok dewey.django.migrations/{name}")
 PY
 
 echo "==> Running the end-to-end scenario (Django migrate, dispatcher, Huey worker)"

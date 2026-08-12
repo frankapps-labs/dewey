@@ -20,6 +20,7 @@ from dewey.core.states import TaskStatus
 from dewey.errors import (
     DeweyError,
     DuplicateTaskTypeError,
+    IdempotencyConflictError,
     NonRetryableError,
     RetryAfter,
     SerializationError,
@@ -55,6 +56,7 @@ __all__ = [
     "DeweyError",
     "DuplicateTaskTypeError",
     "Exponential",
+    "IdempotencyConflictError",
     "NonRetryableError",
     "PolicyRegistry",
     "RetryAfter",

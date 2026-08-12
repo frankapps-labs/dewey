@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dewey.core.backoff import BackoffFn
@@ -43,6 +44,7 @@ async def create_task_async(
     priority: int | None = None,
     max_attempts: int | None = None,
     scheduled_for: datetime | None = None,
+    expires_at: datetime | None = None,
     idempotency_key: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> TaskEntryModel:
@@ -54,6 +56,8 @@ async def create_task_async(
 
     Returns the created TaskEntryModel (with .id).
     """
+    if expires_at is not None and expires_at.utcoffset() is None:
+        raise ValueError("expires_at must be a timezone-aware datetime")
     policy = resolve_policy(task_type)
     queue = policy.queue if queue is None else queue
     task = TaskEntryModel(
@@ -64,6 +68,8 @@ async def create_task_async(
         priority=policy.priority if priority is None else priority,
         max_attempts=policy.max_attempts if max_attempts is None else max_attempts,
         scheduled_for=scheduled_for,
+        initial_scheduled_for=scheduled_for,
+        expires_at=expires_at,
         idempotency_key=idempotency_key,
         task_metadata=metadata or {},
     )
@@ -74,6 +80,84 @@ async def create_task_async(
 
     logger.info("Task created id=%s type=%s queue=%s", task.id, task_type, queue)
     return task
+
+
+async def create_or_get_task_async(
+    session: AsyncSession,
+    *,
+    task_type: str,
+    idempotency_key: str,
+    args: Sequence[Any] | None = None,
+    kwargs: dict[str, Any] | None = None,
+    queue: str | None = None,
+    priority: int | None = None,
+    max_attempts: int | None = None,
+    scheduled_for: datetime | None = None,
+    expires_at: datetime | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> TaskEntryModel:
+    """Async create-once path using a nested transaction for race losers."""
+    from dewey.errors import IdempotencyConflictError
+
+    if not idempotency_key:
+        raise ValueError("create_or_get_task_async requires a non-empty idempotency_key")
+    if scheduled_for is not None and scheduled_for.utcoffset() is None:
+        raise ValueError("scheduled_for must be a timezone-aware datetime")
+    if expires_at is not None and expires_at.utcoffset() is None:
+        raise ValueError("expires_at must be a timezone-aware datetime")
+    policy = resolve_policy(task_type)
+    resolved_queue = policy.queue if queue is None else queue
+    resolved_priority = policy.priority if priority is None else priority
+    resolved_max_attempts = policy.max_attempts if max_attempts is None else max_attempts
+    expected = {
+        "task_type": task_type,
+        "args": encode_args(args),
+        "kwargs": encode_kwargs(kwargs),
+        "queue": resolved_queue,
+        "priority": resolved_priority,
+        "max_attempts": resolved_max_attempts,
+        "scheduled_for": scheduled_for,
+        "expires_at": expires_at,
+    }
+    try:
+        async with session.begin_nested():
+            return await create_task_async(
+                session,
+                task_type=task_type,
+                args=args,
+                kwargs=kwargs,
+                queue=resolved_queue,
+                priority=resolved_priority,
+                max_attempts=resolved_max_attempts,
+                scheduled_for=scheduled_for,
+                expires_at=expires_at,
+                idempotency_key=idempotency_key,
+                metadata=metadata,
+            )
+    except IntegrityError as exc:
+        result = await session.execute(
+            select(TaskEntryModel).where(
+                TaskEntryModel.task_type == task_type,
+                TaskEntryModel.idempotency_key == idempotency_key,
+            )
+        )
+        existing = result.scalar_one_or_none()
+        if existing is None:
+            raise exc
+        actual = {
+            "task_type": existing.task_type,
+            "args": existing.args,
+            "kwargs": existing.kwargs,
+            "queue": existing.queue,
+            "priority": existing.priority,
+            "max_attempts": existing.max_attempts,
+            "scheduled_for": existing.initial_scheduled_for,
+            "expires_at": existing.expires_at,
+        }
+        differing = tuple(name for name, value in expected.items() if actual[name] != value)
+        if differing:
+            raise IdempotencyConflictError(differing) from exc
+        return existing
 
 
 async def process_task_async(
@@ -105,8 +189,6 @@ async def process_task_async(
 
     Returns True if the task was processed successfully.
     """
-    now = datetime.now(UTC)
-
     # Phase 1: Claim the task
     stmt = select(TaskEntryModel).where(TaskEntryModel.id == task_id).with_for_update()
     result = await session.execute(stmt)
@@ -116,6 +198,9 @@ async def process_task_async(
         logger.warning("Task not found id=%s", task_id)
         return False
 
+    # SELECT FOR UPDATE may have waited past the deadline. Observe time only after
+    # the row is ours so expiry, scheduling, and started_at share a fresh instant.
+    now = datetime.now(UTC)
     current_status = TaskStatus(task.status)
 
     if current_status.is_terminal:
@@ -128,6 +213,14 @@ async def process_task_async(
     # logged no-op, never an error.
     if current_status not in _CLAIMABLE:
         logger.info("Task not claimable id=%s status=%s", task_id, task.status)
+        return False
+
+    if task.expires_at is not None and task.expires_at <= now:
+        task.status = TaskStatus.EXPIRED.value
+        task.expired_at = now
+        task.dispatching_at = None
+        await session.commit()
+        logger.info("Task expired before handler invocation id=%s", task_id)
         return False
 
     if task.scheduled_for and task.scheduled_for > now:

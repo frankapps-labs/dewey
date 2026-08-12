@@ -19,6 +19,7 @@ from dewey.django.models import TaskEntry
 from dewey.django.queries import (
     bulk_retry,
     get_dead,
+    get_expired,
     get_failed,
     get_pending,
     get_processing,
@@ -142,6 +143,21 @@ class TestGetDead:
 
 
 @pytest.mark.django_db(transaction=True)
+class TestGetExpired:
+    def test_returns_expired_tasks(self):
+        task = create_task(task_type="deadline")
+        TaskEntry.objects.filter(id=task.id).update(
+            status=TaskStatus.EXPIRED.value,
+            expires_at=timezone.now() - timedelta(seconds=2),
+            expired_at=timezone.now() - timedelta(seconds=1),
+        )
+
+        [result] = get_expired()
+        assert result.status == TaskStatus.EXPIRED
+        assert result.expired_at is not None
+
+
+@pytest.mark.django_db(transaction=True)
 class TestGetTask:
     def test_returns_task(self):
         task = create_task(task_type="test.task", kwargs={"x": 1})
@@ -203,6 +219,13 @@ class TestRetryTask:
         result = retry_task(task.id)
         assert result is not None
         assert result.status == TaskStatus.PENDING  # unchanged
+
+    def test_retry_expired_is_refused(self):
+        task = create_task(task_type="deadline")
+        TaskEntry.objects.filter(id=task.id).update(status=TaskStatus.EXPIRED.value)
+
+        assert retry_task(task.id) is None
+        assert TaskEntry.objects.get(id=task.id).status == TaskStatus.EXPIRED.value
 
     def test_retry_completed_noop(self):
         """Can't retry a completed task."""

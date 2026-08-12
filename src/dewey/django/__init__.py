@@ -11,20 +11,24 @@ from typing import TYPE_CHECKING, Any
 _LAZY: dict[str, str] = {
     # Executor
     "create_task": "dewey.django.executor",
+    "create_or_get_task": "dewey.django.executor",
     "process_task": "dewey.django.executor",
     # Sweep
     "sweep": "dewey.django.sweep",
     "sweep_failed": "dewey.django.sweep",
     "sweep_stuck": "dewey.django.sweep",
     "sweep_dispatching": "dewey.django.sweep",
+    "sweep_expired": "dewey.django.sweep",
     # Queries and actions
     "get_stats": "dewey.django.queries",
     "get_pending": "dewey.django.queries",
     "get_dispatching": "dewey.django.queries",
+    "get_dispatchers": "dewey.django.queries",
     "get_processing": "dewey.django.queries",
     "get_stuck": "dewey.django.queries",
     "get_failed": "dewey.django.queries",
     "get_dead": "dewey.django.queries",
+    "get_expired": "dewey.django.queries",
     "get_task": "dewey.django.queries",
     "get_recent": "dewey.django.queries",
     "retry_task": "dewey.django.queries",
@@ -34,6 +38,9 @@ _LAZY: dict[str, str] = {
 }
 
 if TYPE_CHECKING:  # re-exported for type checkers and IDE completion
+    from dewey.django.executor import (
+        create_or_get_task as create_or_get_task,
+    )
     from dewey.django.executor import (
         create_task as create_task,
     )
@@ -47,7 +54,13 @@ if TYPE_CHECKING:  # re-exported for type checkers and IDE completion
         get_dead as get_dead,
     )
     from dewey.django.queries import (
+        get_dispatchers as get_dispatchers,
+    )
+    from dewey.django.queries import (
         get_dispatching as get_dispatching,
+    )
+    from dewey.django.queries import (
+        get_expired as get_expired,
     )
     from dewey.django.queries import (
         get_failed as get_failed,
@@ -86,6 +99,9 @@ if TYPE_CHECKING:  # re-exported for type checkers and IDE completion
         sweep_dispatching as sweep_dispatching,
     )
     from dewey.django.sweep import (
+        sweep_expired as sweep_expired,
+    )
+    from dewey.django.sweep import (
         sweep_failed as sweep_failed,
     )
     from dewey.django.sweep import (
@@ -94,9 +110,12 @@ if TYPE_CHECKING:  # re-exported for type checkers and IDE completion
 
 __all__ = [
     "bulk_retry",
+    "create_or_get_task",
     "create_task",
     "get_dead",
+    "get_dispatchers",
     "get_dispatching",
+    "get_expired",
     "get_failed",
     "get_pending",
     "get_processing",
@@ -110,6 +129,7 @@ __all__ = [
     "retry_task",
     "sweep",
     "sweep_dispatching",
+    "sweep_expired",
     "sweep_failed",
     "sweep_stuck",
 ]

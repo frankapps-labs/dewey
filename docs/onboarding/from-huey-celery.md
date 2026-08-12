@@ -86,20 +86,44 @@ columns on a row.
 
 ## Running side by side
 
-One broker, one worker process, both kinds of task:
+One broker, one worker process, both kinds of task. On Django,
+`dewey.contrib.django_huey` registers Dewey's processor on the same
+`huey.contrib.djhuey.HUEY` your existing tasks already use, so `manage.py run_huey`
+serves both:
+
+```python
+# settings.py
+DEWEY = {"DISPATCH": "dewey.contrib.django_huey.dispatch"}
+```
 
 ```python
 # myapp/tasks.py
-huey = RedisHuey("myapp")
-
-# Dewey-managed: dispatched by the Dewey dispatcher
-adapter = HueyAdapter(huey)
-adapter.register(process_task)
+from huey.contrib.djhuey import db_task
+from dewey.contrib.django_huey import adapter, dispatch  # noqa: F401
 
 # Not yet migrated: still enqueued directly, invisible to Dewey
-@huey.task()
+@db_task()
 def legacy_thing(x):
     ...
+```
+
+If you wire Huey yourself instead, keep two things the contrib module would have done
+for you: wrap the processor in `huey.contrib.djhuey.close_db` (so worker threads do not
+hold one Django connection forever), and export a module-level `dispatch` wrapper,
+because `DEWEY["DISPATCH"]` is imported with `import_string` and cannot resolve object
+traversal like `"myapp.tasks.adapter.dispatch"`:
+
+```python
+# myapp/tasks.py
+from huey.contrib.djhuey import HUEY, close_db
+from dewey.adapters.huey import HueyAdapter
+from dewey.django import process_task
+
+adapter = HueyAdapter(HUEY)
+adapter.register(close_db(process_task))
+
+def dispatch(task_id: str):
+    return adapter.dispatch(task_id)   # DEWEY = {"DISPATCH": "myapp.tasks.dispatch"}
 ```
 
 The consumer serves both. The dispatcher only ever sees Dewey rows. Cut over one task
@@ -121,9 +145,19 @@ were relying on Celery's pickle serializer, that ends here: pass IDs. `datetime`
 and exit; Dewey reschedules on a fresh worker. This is what keeps handlers unit-testable
 without mocking a framework.
 
-**A dispatcher has to be running.** It is a new process to deploy alongside your worker,
-and it is what makes retries happen at all — `FAILED → PENDING` is a sweep transition and
-the dispatcher owns the sweep tick.
+**`create_task` replaces `on_commit` only inside the same transaction, on the same
+database alias.** That is the upgrade: one commit or one rollback for the business row
+and the task together. It holds on exactly one alias. A task written through a
+different alias — via a database router or an explicit `using=` — rides a separate
+connection and a separate transaction, *even when both aliases point at the same
+physical Postgres*, and it will commit while the business write beside it rolls back.
+Producers keep writing on the business alias; reserve dedicated aliases for the
+dispatcher (`DEWEY["DATABASE"]`) and worker (`DEWEY["WORKER_DATABASE"]`), which run
+after commit anyway.
+
+**A dispatcher has to be running.** It is a new process beside the worker. Due retries are
+claimed directly and wake pacing follows the earliest due row; the dispatcher's periodic
+sweep remains the recovery path for abandoned dispatching/processing work.
 
 **There is no `.delay()`.** Deliberately: it is what re-couples producers to worker
 imports. If you want type safety at the call site, wrap it yourself —

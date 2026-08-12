@@ -29,21 +29,59 @@ There is no `enqueue()`. Producers do not talk to a broker at all.
 
 ## Huey
 
-```python
-# myapp/tasks.py — imported by both the worker and the dispatcher
-from huey import RedisHuey
-from dewey.adapters.huey import HueyAdapter
-from dewey.django import process_task   # or a session-wrapping fn for SQLAlchemy
+### Django: use `dewey.contrib.django_huey`
 
-huey = RedisHuey("myapp", url="redis://localhost:6379/0")
-adapter = HueyAdapter(huey)
-adapter.register(process_task)
+On Django, the wiring ships with Dewey. `dewey.contrib.django_huey` exports a
+module-level `adapter` and `dispatch`; importing it builds a `HueyAdapter` around
+`huey.contrib.djhuey.HUEY`, registers Dewey's processing once with Huey retries
+disabled, and wraps worker execution in `huey.contrib.djhuey.close_db` so worker
+threads recycle Django connections the way a request cycle would.
+
+```python
+# settings.py
+HUEY = {"huey_class": "huey.RedisHuey", "name": "myapp", "url": "redis://localhost:6379/0"}
+DEWEY = {"DISPATCH": "dewey.contrib.django_huey.dispatch"}
+
+# myapp/tasks.py — loaded by Huey's normal Django task discovery
+from dewey.contrib.django_huey import adapter, dispatch  # noqa: F401
 ```
 
 ```bash
-huey_consumer myapp.tasks.huey          # worker
+python manage.py run_huey               # worker
 python manage.py dewey_dispatcher       # dispatcher
 ```
+
+`DEWEY["DISPATCH"]` must be a module-level callable, because it is imported with
+Django's `import_string`. Object traversal such as `"myapp.tasks.adapter.dispatch"` —
+module, then adapter instance, then bound method — does not import and fails at
+startup.
+
+### Wiring Huey yourself
+
+If you manage your own Huey instance, put the wiring in a module both the worker and
+the dispatcher import, and keep the two Django-specific pieces the contrib module would
+otherwise give you: `close_db` around the processor, and a module-level `dispatch`
+wrapper for `DEWEY["DISPATCH"]`.
+
+```python
+# myapp/tasks.py — imported by both the worker and the dispatcher
+from huey.contrib.djhuey import HUEY, close_db
+from dewey.adapters.huey import HueyAdapter
+from dewey.django import process_task   # or a session-wrapping fn for SQLAlchemy
+
+adapter = HueyAdapter(HUEY)
+adapter.register(close_db(process_task))   # close stale Django connections per task
+
+def dispatch(task_id: str):
+    """Module-level, so DEWEY = {"DISPATCH": "myapp.tasks.dispatch"} can import it."""
+    return adapter.dispatch(task_id)
+```
+
+Without `close_db`, a worker thread holds one Django connection for the life of the
+consumer; the first Postgres restart or idle timeout leaves it broken, and every task
+on that thread fails until you restart the consumer. Outside Django (SQLAlchemy), the
+session-wrapping `_process` function plays the same role: open per task, close per
+task.
 
 Both processes import the module, so both agree on the registered task name. The
 dispatcher never imports your handlers — only the adapter wiring.
@@ -52,7 +90,9 @@ dispatcher never imports your handlers — only the adapter wiring.
 
 `register()` registers the Huey task with `retries=0`, deliberately. Two retry engines
 over one task is how work runs twice and how attempt counters stop meaning anything.
-Dewey schedules retries via `scheduled_for` and the sweep; Huey just delivers.
+Dewey schedules retries via `scheduled_for`; dispatchers claim due `FAILED` rows directly
+and pace their wake-up to the earliest due work. The sweep is crash recovery. Huey just
+delivers.
 
 ### What a broker outage looks like
 

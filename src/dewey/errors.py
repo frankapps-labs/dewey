@@ -51,6 +51,29 @@ class SerializationError(DeweyError, TypeError):
     """A task argument cannot be persisted as JSON."""
 
 
+class IdempotencyConflictError(DeweyError):
+    """``create_or_get_task()`` matched an existing task by idempotency key, but
+    one or more immutable creation inputs differ from the existing row.
+
+    The message names only the differing *field names*, never argument values —
+    task payloads may carry sensitive data and this error can end up in logs.
+
+    Args:
+        differing_fields: Names of the immutable creation fields that differ.
+            Stored as an immutable tuple on ``differing_fields``.
+    """
+
+    def __init__(self, differing_fields: tuple[str, ...] | list[str]) -> None:
+        fields = tuple(differing_fields)
+        if not fields:
+            raise ValueError("IdempotencyConflictError requires at least one differing field")
+        self.differing_fields: tuple[str, ...] = fields
+        super().__init__(
+            "idempotency key matched an existing task, but these immutable "
+            f"creation fields differ: {', '.join(fields)}"
+        )
+
+
 class DuplicateTaskTypeError(DeweyError):
     """Two different handlers were registered for the same task type."""
 
@@ -62,6 +85,7 @@ class UnknownTaskTypeError(DeweyError, LookupError):
 __all__ = [
     "DeweyError",
     "DuplicateTaskTypeError",
+    "IdempotencyConflictError",
     "NonRetryableError",
     "RetryAfter",
     "SerializationError",

@@ -5,6 +5,7 @@ from dewey.core.backoff import (
     default_task_backoff,
     retry_delay,
 )
+from dewey.core.heartbeat import DispatcherHeartbeat
 from dewey.core.logging import (
     TRACE_METADATA_KEY,
     TraceContextFilter,
@@ -26,6 +27,7 @@ __all__ = [
     "BackoffFn",
     "default_task_backoff",
     "retry_delay",
+    "DispatcherHeartbeat",
     "TRACE_METADATA_KEY",
     "TraceContextFilter",
     "bind_to_metadata",

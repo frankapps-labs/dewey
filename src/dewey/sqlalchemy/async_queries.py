@@ -8,10 +8,11 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dewey.core.heartbeat import DEFAULT_HEARTBEAT_STALE_SECONDS, DispatcherHeartbeat
 from dewey.core.states import TaskStatus
 from dewey.core.types import TaskEntry
 from dewey.sqlalchemy.listen import notify_work_available_async
-from dewey.sqlalchemy.models import TaskEntryModel
+from dewey.sqlalchemy.models import DispatcherHeartbeatModel, TaskEntryModel
 
 
 def _to_dataclass(row: TaskEntryModel) -> TaskEntry:
@@ -35,11 +36,48 @@ def _to_dataclass(row: TaskEntryModel) -> TaskEntry:
         completed_at=row.completed_at,
         idempotency_key=row.idempotency_key,
         metadata=row.task_metadata,
+        expires_at=row.expires_at,
+        initial_scheduled_for=row.initial_scheduled_for,
+        expired_at=row.expired_at,
     )
 
 
 def _to_list(rows: Sequence[TaskEntryModel]) -> list[TaskEntry]:
     return [_to_dataclass(r) for r in rows]
+
+
+async def get_dispatchers_async(
+    session: AsyncSession,
+    *,
+    database: str | None = None,
+    queues: Sequence[str] | None = None,
+    fresh_within_seconds: float = DEFAULT_HEARTBEAT_STALE_SECONDS,
+    now: datetime | None = None,
+) -> list[DispatcherHeartbeat]:
+    """Fresh dispatchers matching the requested database identity and queues."""
+    observed_at = now or datetime.now(UTC)
+    stmt = select(DispatcherHeartbeatModel).where(
+        DispatcherHeartbeatModel.last_seen_at
+        >= observed_at - timedelta(seconds=fresh_within_seconds)
+    )
+    if database is not None:
+        stmt = stmt.where(DispatcherHeartbeatModel.database == database)
+    result = await session.execute(stmt.order_by(DispatcherHeartbeatModel.last_seen_at.desc()))
+    requested = tuple(queues) if queues else None
+    heartbeats = []
+    for row in result.scalars():
+        heartbeat = DispatcherHeartbeat(
+            instance_id=row.instance_id,
+            dewey_version=row.dewey_version,
+            backend=row.backend,
+            database=row.database,
+            queues=tuple(row.queues) if row.queues is not None else None,
+            started_at=row.started_at,
+            last_seen_at=row.last_seen_at,
+        )
+        if heartbeat.serves(requested):
+            heartbeats.append(heartbeat)
+    return heartbeats
 
 
 # --- Stats ---
@@ -148,6 +186,20 @@ async def get_dead_async(
     return _to_list(result.scalars().all())
 
 
+async def get_expired_async(
+    session: AsyncSession,
+    limit: int = 50,
+    task_type: str | None = None,
+) -> list[TaskEntry]:
+    """Tasks that reached their start deadline without running."""
+    stmt = select(TaskEntryModel).where(TaskEntryModel.status == TaskStatus.EXPIRED.value)
+    if task_type:
+        stmt = stmt.where(TaskEntryModel.task_type == task_type)
+    stmt = stmt.order_by(TaskEntryModel.expired_at.desc()).limit(limit)
+    result = await session.execute(stmt)
+    return _to_list(result.scalars().all())
+
+
 async def get_task_async(session: AsyncSession, task_id: str) -> TaskEntry | None:
     """Single task by ID — for detail views."""
     stmt = select(TaskEntryModel).where(TaskEntryModel.id == task_id)
@@ -188,6 +240,8 @@ async def retry_task_async(session: AsyncSession, task_id: str) -> TaskEntry | N
         return None
 
     status = TaskStatus(task.status)
+    if status == TaskStatus.EXPIRED:
+        return None
     if not status.can_transition_to(TaskStatus.PENDING):
         return _to_dataclass(task)
 

@@ -14,12 +14,14 @@ class TestTaskStatus:
         assert TaskStatus.COMPLETED == "completed"
         assert TaskStatus.FAILED == "failed"
         assert TaskStatus.DEAD == "dead"
+        assert TaskStatus.EXPIRED == "expired"
 
     def test_terminal_states(self):
         """is_terminal means the task won't be auto-processed.
         DEAD is terminal for processing but allows manual retry."""
         assert TaskStatus.COMPLETED.is_terminal is True
         assert TaskStatus.DEAD.is_terminal is True
+        assert TaskStatus.EXPIRED.is_terminal is True
         assert TaskStatus.PENDING.is_terminal is False
         assert TaskStatus.PROCESSING.is_terminal is False
         assert TaskStatus.FAILED.is_terminal is False
@@ -136,7 +138,40 @@ class TestDispatchingState:
         assert not TaskStatus.COMPLETED.can_transition_to(TaskStatus.DISPATCHING)
         assert not TaskStatus.DEAD.can_transition_to(TaskStatus.DISPATCHING)
 
-    def test_failed_is_redispatched_through_pending(self):
-        """The sweep resets FAILED to PENDING; it never dispatches directly."""
-        assert not TaskStatus.FAILED.can_transition_to(TaskStatus.DISPATCHING)
+    def test_due_failed_can_be_claimed_directly_or_recovered_through_pending(self):
+        """Direct claims remove sweep latency; recovery may still reset to PENDING."""
+        assert TaskStatus.FAILED.can_transition_to(TaskStatus.DISPATCHING)
         assert TaskStatus.FAILED.can_transition_to(TaskStatus.PENDING)
+
+
+class TestExpiredState:
+    """EXPIRED is a fully terminal deadline outcome — reachable from every
+    nonterminal state, with no transitions out and no manual retry."""
+
+    def test_expired_is_terminal(self):
+        assert TaskStatus.EXPIRED.is_terminal is True
+
+    def test_pending_can_expire(self):
+        assert TaskStatus.PENDING.can_transition_to(TaskStatus.EXPIRED) is True
+
+    def test_dispatching_can_expire(self):
+        assert TaskStatus.DISPATCHING.can_transition_to(TaskStatus.EXPIRED) is True
+
+    def test_processing_cannot_be_expired_out_from_under_a_running_handler(self):
+        assert TaskStatus.PROCESSING.can_transition_to(TaskStatus.EXPIRED) is False
+
+    def test_failed_can_expire(self):
+        """A task awaiting retry expires instead of being redispatched."""
+        assert TaskStatus.FAILED.can_transition_to(TaskStatus.EXPIRED) is True
+
+    def test_completed_cannot_expire(self):
+        assert TaskStatus.COMPLETED.can_transition_to(TaskStatus.EXPIRED) is False
+
+    def test_dead_cannot_expire(self):
+        """DEAD is already terminal; a deadline never rewrites the outcome."""
+        assert TaskStatus.DEAD.can_transition_to(TaskStatus.EXPIRED) is False
+
+    def test_expired_has_no_outbound_transitions(self):
+        """Unlike DEAD, an expired task cannot be manually retried."""
+        for status in TaskStatus:
+            assert TaskStatus.EXPIRED.can_transition_to(status) is False

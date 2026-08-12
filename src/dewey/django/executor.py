@@ -7,7 +7,7 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 
 from dewey.core.backoff import BackoffFn
 from dewey.core.execution import classify_failure, resolve_handler
@@ -42,6 +42,7 @@ def create_task(
     priority: int | None = None,
     max_attempts: int | None = None,
     scheduled_for: datetime | None = None,
+    expires_at: datetime | None = None,
     idempotency_key: str | None = None,
     metadata: dict[str, Any] | None = None,
     using: str | None = None,
@@ -58,6 +59,8 @@ def create_task(
 
     Returns a TaskEntry dataclass (with .id).
     """
+    if expires_at is not None and expires_at.utcoffset() is None:
+        raise ValueError("expires_at must be a timezone-aware datetime")
     policy = resolve_policy(task_type)
     queue = policy.queue if queue is None else queue
     alias = resolve_db_alias(using)
@@ -70,6 +73,8 @@ def create_task(
         priority=policy.priority if priority is None else priority,
         max_attempts=policy.max_attempts if max_attempts is None else max_attempts,
         scheduled_for=scheduled_for,
+        initial_scheduled_for=scheduled_for,
+        expires_at=expires_at,
         idempotency_key=idempotency_key,
     )
 
@@ -80,6 +85,84 @@ def create_task(
 
     logger.info("Task created id=%s type=%s queue=%s", task.id, task_type, queue)
     return task.to_dataclass()
+
+
+def create_or_get_task(
+    *,
+    task_type: str,
+    idempotency_key: str,
+    args: Sequence[Any] | None = None,
+    kwargs: dict[str, Any] | None = None,
+    queue: str | None = None,
+    priority: int | None = None,
+    max_attempts: int | None = None,
+    scheduled_for: datetime | None = None,
+    expires_at: datetime | None = None,
+    metadata: dict[str, Any] | None = None,
+    using: str | None = None,
+) -> TaskEntryDC:
+    """Create once, or return the identical existing task without aborting the caller."""
+    from dewey.errors import IdempotencyConflictError
+
+    if not idempotency_key:
+        raise ValueError("create_or_get_task requires a non-empty idempotency_key")
+    if scheduled_for is not None and scheduled_for.utcoffset() is None:
+        raise ValueError("scheduled_for must be a timezone-aware datetime")
+    if expires_at is not None and expires_at.utcoffset() is None:
+        raise ValueError("expires_at must be a timezone-aware datetime")
+    policy = resolve_policy(task_type)
+    resolved_queue = policy.queue if queue is None else queue
+    resolved_priority = policy.priority if priority is None else priority
+    resolved_max_attempts = policy.max_attempts if max_attempts is None else max_attempts
+    expected = {
+        "task_type": task_type,
+        "args": encode_args(args),
+        "kwargs": encode_kwargs(kwargs),
+        "queue": resolved_queue,
+        "priority": resolved_priority,
+        "max_attempts": resolved_max_attempts,
+        "scheduled_for": scheduled_for,
+        "expires_at": expires_at,
+    }
+    alias = resolve_db_alias(using)
+    with transaction.atomic(using=alias):
+        try:
+            with transaction.atomic(using=alias):
+                return create_task(
+                    task_type=task_type,
+                    args=args,
+                    kwargs=kwargs,
+                    queue=resolved_queue,
+                    priority=resolved_priority,
+                    max_attempts=resolved_max_attempts,
+                    scheduled_for=scheduled_for,
+                    expires_at=expires_at,
+                    idempotency_key=idempotency_key,
+                    metadata=metadata,
+                    using=alias,
+                )
+        except IntegrityError as exc:
+            try:
+                existing = TaskEntry.objects.using(alias).get(
+                    task_type=task_type,
+                    idempotency_key=idempotency_key,
+                )
+            except TaskEntry.DoesNotExist:
+                raise exc from None
+            actual = {
+                "task_type": existing.task_type,
+                "args": existing.args,
+                "kwargs": existing.kwargs,
+                "queue": existing.queue,
+                "priority": existing.priority,
+                "max_attempts": existing.max_attempts,
+                "scheduled_for": existing.initial_scheduled_for,
+                "expires_at": existing.expires_at,
+            }
+            differing = tuple(name for name, value in expected.items() if actual[name] != value)
+            if differing:
+                raise IdempotencyConflictError(differing) from exc
+            return existing.to_dataclass()
 
 
 def process_task(
@@ -117,7 +200,6 @@ def process_task(
 
     Returns True if the task was processed successfully.
     """
-    now = datetime.now(UTC)
     alias = resolve_db_alias(using)
 
     # Phase 1: Claim the task
@@ -128,6 +210,9 @@ def process_task(
             logger.warning("Task not found id=%s", task_id)
             return False
 
+        # The row lock can block past a deadline. All claim-time decisions must use
+        # the time observed after acquisition, not the time processing was requested.
+        now = datetime.now(UTC)
         current_status = TaskStatus(task.status)
 
         # Already processed or dead — skip
@@ -141,6 +226,14 @@ def process_task(
         # intervened — a duplicate delivery is a logged no-op, never an error.
         if current_status not in _CLAIMABLE:
             logger.info("Task not claimable id=%s status=%s", task_id, task.status)
+            return False
+
+        if task.expires_at is not None and task.expires_at <= now:
+            task.status = TaskStatus.EXPIRED.value
+            task.expired_at = now
+            task.dispatching_at = None
+            task.save(update_fields=["status", "expired_at", "dispatching_at", "updated_at"])
+            logger.info("Task expired before handler invocation id=%s", task_id)
             return False
 
         # Respect scheduled_for scheduling

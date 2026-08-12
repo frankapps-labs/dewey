@@ -7,7 +7,13 @@ from sqlalchemy import update
 from dewey.core.states import TaskStatus
 from dewey.sqlalchemy.executor import create_task
 from dewey.sqlalchemy.models import TaskEntryModel
-from dewey.sqlalchemy.sweep import sweep, sweep_dispatching, sweep_failed, sweep_stuck
+from dewey.sqlalchemy.sweep import (
+    sweep,
+    sweep_dispatching,
+    sweep_expired,
+    sweep_failed,
+    sweep_stuck,
+)
 
 
 class TestSweepFailed:
@@ -169,3 +175,25 @@ class TestSweepDispatching:
         session.commit()
 
         assert result["dispatching"] == [task_id]
+
+
+class TestSweepExpired:
+    def test_expires_waiting_states_but_not_processing(self, session):
+        expired_ids = []
+        for status in (TaskStatus.PENDING, TaskStatus.FAILED, TaskStatus.DISPATCHING):
+            task = create_task(session, task_type="deadline")
+            task.status = status.value
+            task.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+            expired_ids.append(task.id)
+        processing = create_task(session, task_type="deadline")
+        processing.status = TaskStatus.PROCESSING.value
+        processing.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        session.commit()
+
+        assert set(sweep_expired(session)) == set(expired_ids)
+        session.commit()
+        for task_id in expired_ids:
+            row = session.get(TaskEntryModel, task_id)
+            assert row.status == TaskStatus.EXPIRED.value
+            assert row.expired_at is not None
+        assert session.get(TaskEntryModel, processing.id).status == TaskStatus.PROCESSING.value

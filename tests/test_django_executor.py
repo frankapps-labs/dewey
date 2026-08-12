@@ -4,7 +4,7 @@
 
 import os
 import time
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import django
 import pytest
@@ -347,3 +347,68 @@ class TestProcessTask:
 
         updated = TaskEntry.objects.get(id=task_id)
         assert updated.status == TaskStatus.DEAD.value
+
+
+@pytest.mark.django_db(transaction=True)
+class TestExpiry:
+    def test_deadline_is_checked_after_the_task_lock_is_acquired(self, monkeypatch):
+        from django.db.models.query import QuerySet
+
+        import dewey.django.executor as executor_module
+        from dewey.django.models import TaskEntry
+
+        before = datetime.now(UTC)
+        deadline = before + timedelta(minutes=1)
+        after = deadline + timedelta(seconds=1)
+        task = create_task(task_type="deadline", expires_at=deadline)
+        observed = [before]
+
+        class LockAwareClock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return observed[0]
+
+        real_get = QuerySet.get
+
+        def get_after_wait(self, *args, **kwargs):
+            observed[0] = after
+            return real_get(self, *args, **kwargs)
+
+        monkeypatch.setattr(executor_module, "datetime", LockAwareClock)
+        monkeypatch.setattr(QuerySet, "get", get_after_wait)
+        runs = []
+
+        assert process_task(task.id, lambda: runs.append(1)) is False
+        assert runs == []
+        assert TaskEntry.objects.get(id=task.id).status == TaskStatus.EXPIRED.value
+
+    def test_creation_persists_deadline_and_original_schedule(self):
+        scheduled = timezone.now() + timedelta(minutes=5)
+        expires = scheduled + timedelta(minutes=10)
+        task = create_task(
+            task_type="deadline",
+            scheduled_for=scheduled,
+            expires_at=expires,
+        )
+        assert task.initial_scheduled_for == scheduled
+        assert task.expires_at == expires
+
+    def test_naive_deadline_is_rejected(self):
+        with pytest.raises(ValueError, match="timezone-aware"):
+            create_task(task_type="deadline", expires_at=timezone.now().replace(tzinfo=None))
+
+    def test_expired_delivery_never_invokes_handler_or_consumes_attempt(self):
+        from dewey.django.models import TaskEntry
+
+        task = create_task(
+            task_type="deadline",
+            expires_at=timezone.now() - timedelta(seconds=1),
+        )
+        runs: list[int] = []
+
+        assert process_task(task.id, lambda: runs.append(1)) is False
+        row = TaskEntry.objects.get(id=task.id)
+        assert runs == []
+        assert row.status == TaskStatus.EXPIRED.value
+        assert row.expired_at is not None
+        assert row.attempts == 0

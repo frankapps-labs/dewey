@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0]
+
+### Added
+- First-class optional `dewey.contrib.django_huey` wiring using `djhuey.HUEY`, one
+  retry-disabled Dewey processor, `close_db`, module-level `dispatch`, and an independent
+  `DEWEY["WORKER_DATABASE"]` alias.
+- Native absolute `expires_at`, terminal `EXPIRED`, expiry audit timestamps, Django
+  migration `0002`, SQLAlchemy schema updates, query/stats support, and atomic enforcement
+  before dispatch and handler invocation without consuming an attempt.
+- Race-safe `create_or_get_task()` for Django and SQLAlchemy sync/async. Identical
+  post-serialization creation contracts return the existing task in any lifecycle state;
+  conflicting key reuse raises redacted `IdempotencyConflictError` inside a savepoint.
+- Database-backed multi-dispatcher heartbeats, freshness/queue query helpers, lightweight
+  Django system checks, and `manage.py dewey_doctor` human/JSON readiness output.
+
+### Changed
+- Due `FAILED` rows are directly claimable and dispatchers pace wake-up to the earliest
+  retry, scheduled task, or earlier deadline. Ordinary retry latency no longer depends on
+  `SWEEP_INTERVAL_SECONDS`; sweeps remain crash-recovery backstops.
+- Task deadlines are evaluated using the time observed after the worker acquires the row
+  lock, so lock contention cannot let already-expired work start. Idempotent creation now
+  requires timezone-aware `scheduled_for` values for stable database round trips.
+- Django database guidance now separates producer, dispatcher, and worker roles. Producer
+  task creation must share the business transaction's alias; two aliases to one PostgreSQL
+  database are two connections and transactions.
+- `DEWEY["DISPATCH"]` documentation and errors require a Django-importable module-level
+  callable. Broken object traversal examples were removed.
+
+### Compatibility
+- `create_task()` remains compatible, including raw duplicate-key integrity errors.
+- Existing rows receive nullable deadline/snapshot fields and never expire. Status consumers
+  must accept `expired`. Reversing the Django migration maps 0.5-only `expired` rows to
+  0.4-compatible `dead`. SQLAlchemy deployments need an Alembic/additive-DDL upgrade because
+  `metadata.create_all()` does not alter existing tables.
+- Custom dispatch backends may implement `next_due()` and `heartbeat()` for improved pacing
+  and readiness. These optional capabilities are not part of the runtime-checkable base
+  protocol, and the dispatcher retains safe fallback behavior when they are absent.
+
 ## [0.4.0] - 2026-08-06
 
 First published release. `0.3.0` was skipped: the `dewey` name on PyPI already

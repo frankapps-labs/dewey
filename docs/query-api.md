@@ -23,12 +23,15 @@ from dewey.django import get_stats, get_dead, retry_task       # no session
 | `get_stuck(..., older_than_minutes=10)` | `PROCESSING` for too long — sweep candidates |
 | `get_failed(..., limit=50)` | Failed, awaiting their retry time |
 | `get_dead(..., limit=50)` | Dead-lettered, needing a human |
+| `get_expired(..., limit=50)` | Missed their absolute start deadline, with `expires_at`/`expired_at` audit fields |
+| `get_dispatchers(...)` | Fresh database-backed dispatcher heartbeats matching database/queue scope |
 | `get_task(..., task_id)` | One row in full |
 | `get_recent(..., limit=50)` | Recent activity, filtered |
 
 ```python
 get_stats()
-# {'pending': 3, 'dispatching': 1, 'processing': 2, 'completed': 4891, 'failed': 0, 'dead': 1}
+# {'pending': 3, 'dispatching': 1, 'processing': 2, 'completed': 4891,
+#  'failed': 0, 'dead': 1, 'expired': 0}
 ```
 
 Reading these together is usually how you diagnose:
@@ -43,7 +46,7 @@ Reading these together is usually how you diagnose:
 
 | Function | Effect |
 |---|---|
-| `retry_task(..., task_id)` | `FAILED`/`DEAD` → `PENDING`, dispatched on the next claim |
+| `retry_task(..., task_id)` | `FAILED`/`DEAD` → `PENDING`; returns `None` for `EXPIRED` (create new work instead) |
 | `bulk_retry(...)` | The same, for every retryable row |
 | `kill_task(..., task_id)` | Force → `DEAD`, respected even mid-processing |
 | `purge_completed(..., older_than_days=30)` | Delete old `COMPLETED` rows |

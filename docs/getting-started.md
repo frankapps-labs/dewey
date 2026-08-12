@@ -52,10 +52,16 @@ INSTALLED_APPS = [
 ]
 
 DEWEY = {
-    # Required: dotted path to your transport's dispatch callable.
-    "DISPATCH": "myapp.tasks.adapter.dispatch",
+    # Required: dotted path to a module-level dispatch callable.
+    "DISPATCH": "dewey.contrib.django_huey.dispatch",
 }
 ```
+
+The value is resolved with Django's `import_string`, which imports a module and takes
+one attribute from it. Object traversal such as `"myapp.tasks.adapter.dispatch"` —
+module, then object, then method — is unsupported and fails at startup. Either use the
+contrib module shown here, or export a module-level wrapper from your own module (step 3
+shows one).
 
 ```bash
 python manage.py migrate
@@ -86,28 +92,74 @@ involved.
 
 ### 3. Wire the transport
 
-Same module, so the worker and the dispatcher agree on the task name:
+The preferred wiring for Django is `dewey.contrib.django_huey`. Point Huey's own Django
+integration at your broker and Dewey at the contrib dispatch:
+
+```python
+# settings.py
+HUEY = {
+    "huey_class": "huey.RedisHuey",
+    "name": "myapp",
+    "url": "redis://localhost:6379/0",
+}
+
+DEWEY = {"DISPATCH": "dewey.contrib.django_huey.dispatch"}
+```
+
+Import the explicit wiring module from a task module Huey's normal Django discovery
+already loads; Dewey does not perform hidden handler autodiscovery:
+
+```python
+# myapp/tasks.py
+from dewey.contrib.django_huey import adapter, dispatch  # noqa: F401
+```
+
+Importing `dewey.contrib.django_huey` builds a `HueyAdapter` around
+`huey.contrib.djhuey.HUEY`, registers Dewey's processing exactly once with Huey retries
+disabled, and wraps worker execution in `huey.contrib.djhuey.close_db`. The module
+exports `adapter` and `dispatch` at module level, and a misconfiguration (no Huey
+installed, no `HUEY` setting) raises `ImproperlyConfigured` telling you what to fix,
+rather than failing later in a worker.
+
+`close_db` matters: a Huey worker is a long-lived process, and without it each worker
+thread keeps reusing one Django connection forever. The first time Postgres drops that
+connection — a restart, a failover, an idle timeout — every subsequent task on that
+thread fails until the consumer restarts. `close_db` closes stale connections around
+each task, the same lifecycle Django gives a request (and it honours `CONN_MAX_AGE`).
+
+**Wiring it yourself.** If you manage your own Huey instance, apply `close_db` yourself
+and export a module-level `dispatch` wrapper — `DEWEY["DISPATCH"]` cannot import a
+method reached through an object (see step 1):
 
 ```python
 # myapp/tasks.py (continued)
-from huey import RedisHuey
+from huey.contrib.djhuey import HUEY, close_db
 from dewey.adapters.huey import HueyAdapter
 from dewey.django import process_task
 
-huey = RedisHuey("myapp", url="redis://localhost:6379/0")
-adapter = HueyAdapter(huey)
-adapter.register(process_task)
+adapter = HueyAdapter(HUEY)
+adapter.register(close_db(process_task))
+
+def dispatch(task_id: str):
+    """Module-level, so DEWEY = {"DISPATCH": "myapp.tasks.dispatch"} can import it."""
+    return adapter.dispatch(task_id)
 ```
 
 ### 4. Create work
 
 ```python
 from django.db import transaction
-from dewey.django import create_task
+from datetime import UTC, datetime, timedelta
+from dewey.django import create_or_get_task
 
 with transaction.atomic():
     command = Command.objects.create(...)
-    create_task(task_type="agent.notify", args=[str(command.id)])
+    create_or_get_task(
+        task_type="agent.notify",
+        idempotency_key=f"notify:{command.id}",
+        args=[str(command.id)],
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
 ```
 
 If the block rolls back, the task row and its wake-up go with it. Postgres holds the
@@ -118,13 +170,27 @@ never happened — and no `on_commit` callback for you to remember.
 
 ```bash
 python manage.py dewey_dispatcher      # claims rows, dispatches IDs, runs the sweep
-huey_consumer myapp.tasks.huey         # processes task IDs
+python manage.py run_huey              # processes task IDs
 ```
 
 Both are ordinary long-running processes. Run more than one dispatcher if you like:
 `SKIP LOCKED` makes them cooperate without a leader election.
 
-Useful flags while getting oriented:
+Before calling the deployment ready, run the active doctor. Human output is the default;
+JSON has stable finding IDs and exits non-zero on readiness errors:
+
+```bash
+python manage.py dewey_doctor
+python manage.py dewey_doctor --format json --queues critical,default
+```
+
+It verifies configuration, PostgreSQL/schema/migrations, the importable dispatch callable,
+the current process's handler/processor registration shape, aliases/recovery settings, and
+a fresh matching dispatcher heartbeat. Without an expected-task manifest it cannot prove
+that every intended handler was imported, and one process cannot inspect another worker's
+in-memory registry; the output says so.
+
+Useful dispatcher flags while getting oriented:
 
 ```bash
 python manage.py dewey_dispatcher --once                     # one pass, then exit
@@ -136,7 +202,7 @@ python manage.py dewey_dispatcher --idle-poll 1              # tighter poll for 
 
 ```python
 DEWEY = {
-    "DISPATCH": "myapp.tasks.adapter.dispatch",  # required
+    "DISPATCH": "dewey.contrib.django_huey.dispatch",  # required; module-level callable
     "QUEUES": None,                    # None serves every queue
     "BATCH_SIZE": 100,                 # rows claimed per round trip
     "IDLE_POLL_SECONDS": 5.0,          # max wait before polling anyway
@@ -144,16 +210,18 @@ DEWEY = {
     "DISPATCH_TIMEOUT_SECONDS": 300,   # must exceed your worst-case broker backlog
     "STUCK_THRESHOLD_MINUTES": 10,     # PROCESSING older than this is presumed abandoned
     "SWEEP_LIMIT": 100,
-    "DATABASE": "default",             # alias, for a dedicated Dewey connection
+    "DATABASE": "default",             # the dispatcher's alias
+    "WORKER_DATABASE": None,           # worker alias; None lets Django routers decide
 }
 ```
 
 A misspelled key raises `ImproperlyConfigured` at startup rather than being silently
 ignored.
 
-> **The dispatcher owns the sweep.** `FAILED → PENDING` is a sweep transition, so with
-> `SWEEP_INTERVAL_SECONDS` set to `None` and nothing else calling `sweep()`, failed
-> tasks never retry.
+> **Retries are direct; sweeps are recovery.** Due `FAILED` rows are claimable without a
+> sweep and the dispatcher wakes for the earliest due row. Setting
+> `SWEEP_INTERVAL_SECONDS=None` disables abandoned-processing/dispatch recovery and is
+> reported by checks/doctor; it does not add ordinary retry latency.
 
 ---
 
@@ -167,6 +235,30 @@ from dewey.sqlalchemy import Base
 
 engine = create_engine("postgresql://localhost/myapp")
 Base.metadata.create_all(engine)  # or generate an Alembic revision from it
+```
+
+`create_all()` does not alter an existing 0.4 table. Prefer generating an Alembic
+revision from 0.5 metadata. The equivalent additive PostgreSQL DDL is:
+
+```sql
+ALTER TABLE task_entries ADD COLUMN IF NOT EXISTS expires_at timestamptz NULL;
+ALTER TABLE task_entries ADD COLUMN IF NOT EXISTS expired_at timestamptz NULL;
+ALTER TABLE task_entries ADD COLUMN IF NOT EXISTS initial_scheduled_for timestamptz NULL;
+CREATE INDEX IF NOT EXISTS ix_task_entries_expires_at ON task_entries (expires_at)
+  WHERE expires_at IS NOT NULL AND status IN ('pending', 'dispatching', 'failed');
+CREATE TABLE IF NOT EXISTS dewey_dispatcher_heartbeats (
+  instance_id varchar(36) PRIMARY KEY,
+  dewey_version varchar(50) NOT NULL,
+  backend varchar(50) NOT NULL,
+  database varchar(200) NOT NULL,
+  queues json NULL,
+  started_at timestamptz NOT NULL,
+  last_seen_at timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_dewey_heartbeats_last_seen
+  ON dewey_dispatcher_heartbeats (last_seen_at);
+CREATE INDEX IF NOT EXISTS ix_dewey_heartbeats_backend_database
+  ON dewey_dispatcher_heartbeats (backend, database);
 ```
 
 ### 2. Declare a task and wire the transport
@@ -341,28 +433,58 @@ A separate database role is worth it if you can manage one: it gives you a
 `CONNECTION LIMIT` Dewey physically cannot exceed, and makes Dewey's share legible in
 `pg_stat_activity`.
 
-For Django, point Dewey at its own alias and let the settings contract use it:
+For Django, name the roles explicitly. Dewey touches the database as three actors, and
+they deliberately do not share connections:
+
+- **Producer** — your application code calling `create_task` next to a business write.
+  Atomicity comes first: the task must be written on the **same alias, and therefore the
+  same connection and transaction, as the business row it belongs to**. Roll back, and
+  neither ever existed; commit, and both did. Producer writes therefore follow your
+  normal ORM routing — you do not point them anywhere special.
+- **Dispatcher** — the `dewey_dispatcher` process. `DEWEY["DATABASE"]` names its alias.
+  It opens its own connections and only ever sees rows after your transactions commit.
+- **Worker** — `process_task` inside the Huey consumer. `DEWEY["WORKER_DATABASE"]`
+  names its alias for the `dewey.contrib.django_huey` wiring (custom wiring passes
+  `using=` instead). Also post-commit, also its own connections.
 
 ```python
 DATABASES = {
-    "default": {...},
+    "default": {...},   # producers: business rows and their tasks, one transaction
+    # Same NAME and HOST as "default" — same database, separate connection budget.
     "dewey": {..., "CONN_MAX_AGE": 0, "OPTIONS": {"pool": {"max_size": 2}}},
 }
-DEWEY = {"DISPATCH": "myapp.tasks.adapter.dispatch", "DATABASE": "dewey"}
+DEWEY = {
+    "DISPATCH": "dewey.contrib.django_huey.dispatch",
+    "DATABASE": "dewey",           # dispatcher
+    "WORKER_DATABASE": "dewey",    # worker
+}
 ```
 
 `DEWEY["DATABASE"]` must name the alias used by the dispatcher; the dispatcher does not
 consult routers when its backend is constructed.
 
-You will want a database router so Dewey's models resolve to that alias. Dewey resolves
-the alias through your routers for every transaction, `SELECT FOR UPDATE`, write and
-NOTIFY, so all of them stay on the one connection that holds the lock. If you prefer not
-to add a router, `create_task`, `process_task`, `sweep`, `retry_task` and `kill_task`
-also accept the alias explicitly: `create_task(task_type=..., using="dewey")`. The wider
-query/action API (`get_*`, `bulk_retry`, `purge_completed`) follows routers and has no
-`using` argument, so router-less alias use is limited to the functions listed above.
-Pointing at the same physical database through a second alias is a legitimate
-configuration — the point is the separate connection budget, not a separate server.
+Be clear about what the alias split does and does not buy. **Two aliases pointing at
+one physical PostgreSQL database are two connections and two transactions.**
+`transaction.atomic(using="default")` covers nothing written through `"dewey"`, even
+though both aliases resolve to the same server and the same `task_entries` table. The
+split exists to give background work its own connection budget; it never creates shared
+atomicity.
+
+Which is why you should **not add a database router that sends Dewey's models to the
+background alias.** A router routes every `TaskEntry` write — including the producer's
+`create_task` — so each task row silently moves onto the `"dewey"` connection, into its
+own transaction, and commits or survives independently of the business write beside it.
+The rollback guarantee from step 4 disappears, and nothing errors to tell you. Routers
+*are* honoured consistently when you have one — Dewey resolves the alias through them
+for every transaction, `SELECT FOR UPDATE`, write and NOTIFY, so everything stays on
+the one connection that holds the lock — but routing the whole ledger away from
+producers is a deliberate choice for a physically separate ledger database, made
+knowing producer atomicity is lost. It is never a default.
+
+For explicit pinning without a router, `create_task`, `process_task`, `sweep`,
+`retry_task` and `kill_task` accept the alias directly:
+`create_task(task_type=..., using="dewey")`. The wider query/action API (`get_*`,
+`bulk_retry`, `purge_completed`) follows routers and has no `using` argument.
 
 **What the lab measures.** Its `cohabitation` and `cohabitation-chaos` scenarios run
 sustained tenant traffic (`SELECT pg_sleep`) against the same Postgres as a live

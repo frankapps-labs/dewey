@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
+from dewey.core.heartbeat import DEFAULT_HEARTBEAT_STALE_SECONDS, DispatcherHeartbeat
 from dewey.core.states import TaskStatus
 from dewey.core.types import TaskEntry
 from dewey.sqlalchemy.listen import notify_work_available
-from dewey.sqlalchemy.models import TaskEntryModel
+from dewey.sqlalchemy.models import DispatcherHeartbeatModel, TaskEntryModel
 
 
 def _to_dataclass(row: TaskEntryModel) -> TaskEntry:
@@ -35,11 +36,48 @@ def _to_dataclass(row: TaskEntryModel) -> TaskEntry:
         completed_at=row.completed_at,
         idempotency_key=row.idempotency_key,
         metadata=row.task_metadata,
+        expires_at=row.expires_at,
+        initial_scheduled_for=row.initial_scheduled_for,
+        expired_at=row.expired_at,
     )
 
 
 def _to_list(rows: Sequence[TaskEntryModel]) -> list[TaskEntry]:
     return [_to_dataclass(r) for r in rows]
+
+
+def get_dispatchers(
+    session: Session,
+    *,
+    database: str | None = None,
+    queues: Sequence[str] | None = None,
+    fresh_within_seconds: float = DEFAULT_HEARTBEAT_STALE_SECONDS,
+    now: datetime | None = None,
+) -> list[DispatcherHeartbeat]:
+    """Fresh dispatchers matching the requested database identity and queues."""
+    observed_at = now or datetime.now(UTC)
+    stmt = select(DispatcherHeartbeatModel).where(
+        DispatcherHeartbeatModel.last_seen_at
+        >= observed_at - timedelta(seconds=fresh_within_seconds)
+    )
+    if database is not None:
+        stmt = stmt.where(DispatcherHeartbeatModel.database == database)
+    rows = session.execute(stmt.order_by(DispatcherHeartbeatModel.last_seen_at.desc())).scalars()
+    requested = tuple(queues) if queues else None
+    result = []
+    for row in rows:
+        heartbeat = DispatcherHeartbeat(
+            instance_id=row.instance_id,
+            dewey_version=row.dewey_version,
+            backend=row.backend,
+            database=row.database,
+            queues=tuple(row.queues) if row.queues is not None else None,
+            started_at=row.started_at,
+            last_seen_at=row.last_seen_at,
+        )
+        if heartbeat.serves(requested):
+            result.append(heartbeat)
+    return result
 
 
 # --- Stats ---
@@ -142,6 +180,19 @@ def get_dead(
     return _to_list(session.execute(stmt).scalars().all())
 
 
+def get_expired(
+    session: Session,
+    limit: int = 50,
+    task_type: str | None = None,
+) -> list[TaskEntry]:
+    """Tasks that reached their start deadline without running."""
+    stmt = select(TaskEntryModel).where(TaskEntryModel.status == TaskStatus.EXPIRED.value)
+    if task_type:
+        stmt = stmt.where(TaskEntryModel.task_type == task_type)
+    stmt = stmt.order_by(TaskEntryModel.expired_at.desc()).limit(limit)
+    return _to_list(session.execute(stmt).scalars().all())
+
+
 def get_task(session: Session, task_id: str) -> TaskEntry | None:
     """Single task by ID — for detail views."""
     stmt = select(TaskEntryModel).where(TaskEntryModel.id == task_id)
@@ -179,6 +230,8 @@ def retry_task(session: Session, task_id: str) -> TaskEntry | None:
         return None
 
     status = TaskStatus(task.status)
+    if status == TaskStatus.EXPIRED:
+        return None
     if not status.can_transition_to(TaskStatus.PENDING):
         return _to_dataclass(task)
 
