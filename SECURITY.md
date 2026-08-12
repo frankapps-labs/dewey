@@ -16,6 +16,24 @@ Useful detail: affected version, what an attacker can achieve, and a reproductio
 have one. We will acknowledge within a few working days, and will credit you in the
 advisory unless you would rather we did not.
 
+## What runs automatically
+
+These are the checks in the repository, not a claim that they are sufficient:
+
+- **CodeQL** analyses Dewey's Python source on every push and pull request to `main`, and
+  weekly. It runs with `build-mode: none`, so analysis never executes project code.
+- **Dependency advisories** are audited with `pip-audit` against the locked dependency
+  set. The locked runtime set resolved from all published extras is a blocking CI gate.
+  Dev and tooling dependencies are audited advisory-only, since they reach
+  contributors rather than users.
+- **Dependabot** proposes GitHub Actions and Python dependency updates weekly.
+- **OpenSSF Scorecard** runs on `main` and publishes its result publicly. It uses no
+  stored token: results are published with a short-lived Sigstore identity, which also
+  means the Branch-Protection check reports as inconclusive rather than passing.
+
+Releases publish to PyPI with Trusted Publishing (OIDC); there is no long-lived PyPI
+token in this repository.
+
 ## Scope
 
 Dewey is a library that stores and dispatches task rows. What is in scope:

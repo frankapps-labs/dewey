@@ -6,88 +6,37 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
-  # Dewey's suite talks to a real Postgres on purpose: FOR UPDATE SKIP LOCKED,
-  # partial indexes, LISTEN/NOTIFY and committed claims cannot be proven otherwise.
+  # Dewey's suite talks to real services because locking and delivery semantics
+  # cannot be proven against SQLite or mocks.
   DEWEY_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/dewey_test
   DEWEY_TEST_DATABASE_URL_ASYNC: postgresql+asyncpg://postgres:postgres@localhost:5432/dewey_test
   DEWEY_TEST_REDIS_URL: redis://localhost:6379/0
 
 jobs:
-  test:
+  checks:
+    name: Static checks
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12", "3.13"]
-        django-spec: [""]
-        huey-version: [""]
-        include:
-          # Django 5.2 is the supported floor/LTS and the only Django line that
-          # supports Python 3.11. Django 6 requires Python 3.12+.
-          - python-version: "3.11"
-            django-spec: "Django~=5.2.0"
-          - python-version: "3.12"
-            django-spec: "Django~=5.2.0"
-          - python-version: "3.12"
-            django-spec: "Django>=6,<7"
-          - python-version: "3.13"
-            django-spec: "Django>=6,<7"
-          # The oldest supported Huey. pyproject says >=2.5, so prove it.
-          - python-version: "3.12"
-            huey-version: "2.5"
-
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: dewey_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      redis:
-        image: redis:7
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.13"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
 
       - name: Install dependencies
-        run: uv sync --all-extras --dev
-
-      - name: Pin ${{ matrix.django-spec }}
-        if: matrix.django-spec != ''
-        run: uv pip install --upgrade "${{ matrix.django-spec }}"
-
-      - name: Pin Huey ${{ matrix.huey-version }}
-        if: matrix.huey-version != ''
-        run: uv pip install "huey~=${{ matrix.huey-version }}.0"
-
-      - name: Report the versions actually under test
-        run: |
-          uv run python -c "import django, sys; print('python', sys.version)"
-          uv run python -c "import django; print('django', django.get_version())"
-          uv run python -c "import huey; print('huey', huey.__version__)"
+        run: uv sync --locked --all-extras --dev
 
       - name: Run linting
         run: uv run ruff check src/ tests/
@@ -98,11 +47,36 @@ jobs:
       - name: Run typecheck
         run: uv run basedpyright
 
-      - name: Run tests
-        run: uv run pytest
-
-  coverage:
+  test:
+    name: Test (Python ${{ matrix.python-version }}, ${{ matrix.django-requirement }}, ${{ matrix.huey-requirement }})
     runs-on: ubuntu-latest
+    env:
+      # Compatibility requirements are installed after the locked sync. Prevent
+      # later `uv run` commands from silently restoring lockfile versions.
+      UV_NO_SYNC: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # One intentional lane per supported Python version. Django 5.2 is
+          # the floor on 3.11; supported newer Pythons exercise current Django.
+          # Every lane upgrades within Huey 3.x, so CI tracks its latest release.
+          - python-version: "3.11"
+            django-requirement: "Django~=5.2.0"
+            huey-requirement: "huey>=3,<4"
+            upload-coverage: false
+          - python-version: "3.12"
+            django-requirement: "Django>=6,<7"
+            huey-requirement: "huey>=3,<4"
+            upload-coverage: true
+          - python-version: "3.13"
+            django-requirement: "Django>=6,<7"
+            huey-requirement: "huey>=3,<4"
+            upload-coverage: false
+          - python-version: "3.14"
+            django-requirement: "Django>=6,<7"
+            huey-requirement: "huey>=3,<4"
+            upload-coverage: false
 
     services:
       postgres:
@@ -129,38 +103,61 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
 
-      - name: Install dependencies
-        run: uv sync --all-extras --dev
+      - name: Install locked dependencies
+        run: uv sync --locked --all-extras --dev
 
-      - name: Run tests with coverage
+      - name: Install compatibility requirements
+        run: uv pip install --upgrade "${{ matrix.django-requirement }}" "${{ matrix.huey-requirement }}"
+
+      - name: Verify compatibility requirements
+        run: |
+          uv run python - <<'PY'
+          import django
+          import huey
+          from packaging.requirements import Requirement
+
+          requirements = (
+              ("${{ matrix.django-requirement }}", django.get_version()),
+              ("${{ matrix.huey-requirement }}", huey.__version__),
+          )
+          for raw_requirement, version in requirements:
+              requirement = Requirement(raw_requirement)
+              assert version in requirement.specifier, (raw_requirement, version)
+              print(requirement.name, version)
+          PY
+
+      - name: Run tests
+        if: matrix.upload-coverage == false
+        run: uv run pytest
+
+      - name: Run tests and generate Coveralls report
+        if: matrix.upload-coverage == true
         run: uv run pytest --cov=dewey --cov-report=lcov
 
       - name: Check Coveralls availability
+        if: matrix.upload-coverage == true
         id: coveralls_check
         run: curl -sf --max-time 10 https://coveralls.io > /dev/null && echo "available=true" >> "$GITHUB_OUTPUT" || echo "available=false" >> "$GITHUB_OUTPUT"
 
       - name: Upload to Coveralls
-        if: steps.coveralls_check.outputs.available == 'true'
-        uses: coverallsapp/github-action@v2
+        if: matrix.upload-coverage == true && steps.coveralls_check.outputs.available == 'true'
+        uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2
         with:
           file: coverage.lcov
 
   wheel-smoke:
-    # Builds the wheel, installs it into a clean virtualenv, and runs the full
-    # producer -> dispatcher -> Huey worker path against real Postgres and Redis.
-    # This is what catches packaging mistakes the in-repo suite cannot see.
+    name: Installed-wheel smoke
     runs-on: ubuntu-latest
-
     services:
       postgres:
         image: postgres:16
@@ -186,25 +183,23 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.12"
+          python-version: "3.13"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
 
-      - name: Build the wheel
-        run: uv build
-
-      - name: Check package metadata
-        run: uvx twine check dist/*
+      - name: Build and check package
+        run: |
+          uv build
+          uvx twine check dist/*
 
       - name: Inspect wheel contents
-        run: |
-          python -m zipfile -l dist/*.whl
+        run: python -m zipfile -l dist/*.whl
 
       - name: Run the optional-extra import matrix
         run: ./scripts/optional_import_matrix.sh
@@ -213,46 +208,35 @@ jobs:
         run: ./scripts/wheel_smoke.sh
 
   audit:
-    # pip-audit cannot build its temp venv on some dev machines (ensurepip aborts), so
-    # the audit lives here where the environment is predictable. Advisory-only: a new
-    # CVE in a transitive dev dependency should surface, not block an unrelated PR.
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v7
-
-      - name: Export the locked dependency set
-        run: uv export --format requirements-txt --no-hashes --no-emit-project > requirements-audit.txt
-
-      - name: Audit dependencies
-        run: uvx pip-audit --no-deps -r requirements-audit.txt
-
-  build:
+    name: Dependency audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.12"
+          python-version: "3.13"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
 
-      - name: Install dependencies
-        run: uv sync --all-extras --dev
+      - name: Export locked dependency sets
+        run: |
+          uv export --locked --format requirements-txt --no-hashes --no-emit-project \
+            --no-dev --all-extras > requirements-runtime.txt
+          uv export --locked --format requirements-txt --no-hashes --no-emit-project \
+            --only-dev > requirements-dev-audit.txt
 
-      - name: Build package
-        run: uv build
+      # Blocking: markers split the runtime graph across the oldest and newest
+      # Python/Django lines, so audit both interpreter contexts.
+      - name: Audit runtime dependencies
+        run: |
+          uvx --python 3.11 pip-audit --no-deps --disable-pip -r requirements-runtime.txt
+          uvx --python 3.14 pip-audit --no-deps --disable-pip -r requirements-runtime.txt
 
-      - name: Check package metadata
-        run: uv run twine check dist/*
+      # Tooling is not shipped to users. Surface advisories without blocking an
+      # unrelated product patch.
+      - name: Audit development tooling
+        continue-on-error: true
+        run: uvx pip-audit --no-deps --disable-pip -r requirements-dev-audit.txt

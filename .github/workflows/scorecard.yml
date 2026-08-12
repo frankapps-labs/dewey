@@ -1,0 +1,61 @@
+name: Scorecard
+
+# OpenSSF Scorecard, for a public repository with no secrets of its own.
+#
+# It runs on pushes to the default branch and weekly. It deliberately does not
+# run on pull_request: `publish_results` is only meaningful for the default
+# branch, and a fork pull request must never get the write scopes below.
+#
+# There is no `repo_token`, by choice. That means the Branch-Protection check
+# reports as inconclusive rather than passing — it needs a classic PAT with
+# admin read, and a long-lived admin token in CI costs more than that one check
+# is worth. Every other check works with the ephemeral GITHUB_TOKEN.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "18 6 * * 2"
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    # Only ever runs against the default branch of this repository.
+    if: github.repository == 'frankapps-labs/dewey' && (github.event_name != 'push' || github.ref == 'refs/heads/main')
+    timeout-minutes: 20
+
+    permissions:
+      # Upload the SARIF result to code scanning.
+      security-events: write
+      # Publish the result to the public OpenSSF API via Sigstore — this is what
+      # replaces a stored token, and why no secret is needed.
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@62b2cac7ed8198b15735ed49ab1e5cf35480ba46 # v2.4.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      - name: Upload the SARIF result as an artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: scorecard-results
+          path: results.sarif
+          retention-days: 5
+
+      - name: Upload the SARIF result to code scanning
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        with:
+          sarif_file: results.sarif
