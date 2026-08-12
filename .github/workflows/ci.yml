@@ -20,15 +20,19 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
-        django-version: [""]
+        django-spec: [""]
         huey-version: [""]
         include:
-          # The oldest and newest supported Django, pinned explicitly. Without this
-          # the matrix only ever tests whatever the resolver picks.
+          # Django 5.2 is the supported floor/LTS and the only Django line that
+          # supports Python 3.11. Django 6 requires Python 3.12+.
+          - python-version: "3.11"
+            django-spec: "Django~=5.2.0"
           - python-version: "3.12"
-            django-version: "4.2"
+            django-spec: "Django~=5.2.0"
           - python-version: "3.12"
-            django-version: "5.1"
+            django-spec: "Django>=6,<7"
+          - python-version: "3.13"
+            django-spec: "Django>=6,<7"
           # The oldest supported Huey. pyproject says >=2.5, so prove it.
           - python-version: "3.12"
             huey-version: "2.5"
@@ -71,9 +75,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras --dev
 
-      - name: Pin Django ${{ matrix.django-version }}
-        if: matrix.django-version != ''
-        run: uv pip install "Django~=${{ matrix.django-version }}.0"
+      - name: Pin ${{ matrix.django-spec }}
+        if: matrix.django-spec != ''
+        run: uv pip install --upgrade "${{ matrix.django-spec }}"
 
       - name: Pin Huey ${{ matrix.huey-version }}
         if: matrix.huey-version != ''

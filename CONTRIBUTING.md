@@ -26,8 +26,8 @@ SQLite or a mock, and tests that pretend otherwise are worse than no tests.
 make lint typecheck format-check test
 ```
 
-CI runs the same gates across Python 3.11-3.13, plus Django 4.2 and 5.1 explicitly, plus
-an installed-wheel smoke test. `make wheel-smoke` runs that last one locally if you have
+CI runs the same gates across Python 3.11-3.13, explicitly covers Django 5.2 LTS and
+Django 6.0, and runs an installed-wheel smoke test. `make wheel-smoke` runs that last one locally if you have
 touched packaging, imports, or anything in `src/dewey/django/migrations/`.
 
 ## What we look for

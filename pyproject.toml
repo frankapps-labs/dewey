@@ -39,7 +39,7 @@ async = [
     "asyncpg>=0.30.0",
 ]
 django = [
-    "Django>=4.2",
+    "Django>=5.2,<7",
 ]
 huey = [
     "huey>=2.5",
@@ -57,10 +57,10 @@ dev = [
     "sqlalchemy[asyncio]>=2.0",
     "asyncpg>=0.30.0",
     "aiosqlite>=0.21.0",
-    # Patched Django per interpreter: 6.0 needs Python 3.12+, and Dewey still
-    # supports 3.11. Floors are set to releases without open advisories.
-    "Django>=5.2.16; python_version < '3.12'",
-    "Django>=6.0.7; python_version >= '3.12'",
+    # Django 5.2 LTS keeps Python 3.11 support; Django 6 requires Python 3.12+.
+    # Floors are set to releases without open advisories.
+    "Django>=5.2.16,<6; python_version < '3.12'",
+    "Django>=6.0.7,<7; python_version >= '3.12'",
     "psycopg2-binary>=2.9",
     "huey>=2.5",
 ]
