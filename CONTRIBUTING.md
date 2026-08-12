@@ -26,9 +26,28 @@ SQLite or a mock, and tests that pretend otherwise are worse than no tests.
 make lint typecheck format-check test
 ```
 
-CI runs the same gates across Python 3.11-3.13, explicitly covers Django 5.2 LTS and
+CI runs the same gates across Python 3.11-3.14, explicitly covers Django 5.2 LTS and
 Django 6.0, and runs an installed-wheel smoke test. `make wheel-smoke` runs that last one locally if you have
 touched packaging, imports, or anything in `src/dewey/django/migrations/`.
+
+### Which CI jobs can fail your pull request
+
+Blocking: the 3.11-3.14 test matrix, coverage, the wheel smoke test, the build, and
+`audit (runtime, blocking)`.
+
+Advisory (`continue-on-error`, red without blocking a merge):
+
+- **`audit (dev tooling, advisory)`.** A CVE in ruff or a pytest plugin ships to nobody.
+
+The audit is split by who is exposed, using two separate `uv export` runs rather than
+filtering one report: `--no-dev --all-extras` is what users install, so an advisory there
+blocks; `--only-dev` is tooling, so it only reports. If a runtime advisory blocks your
+unrelated pull request, the fix is to raise the floor in `pyproject.toml` and relock — not
+to add an ignore.
+
+Dependabot opens one grouped pull request per week for GitHub Actions and for
+`pyproject.toml`/`uv.lock` minor and patch updates. Majors come separately, because a
+Django or SQLAlchemy major is a compatibility decision with matrix consequences.
 
 ## What we look for
 

@@ -1,0 +1,55 @@
+# Dewey is small and maintained in bounded slices, so the goal here is one
+# reviewable pull request per ecosystem per week, not a stream of them.
+#
+# Grouping rule: minor and patch updates arrive grouped, because they are read as
+# one diff and verified by one CI run. Major updates are deliberately left
+# ungrouped — a Django or SQLAlchemy major is a compatibility decision with its
+# own matrix consequences, and it should not ride along with a ruff bump.
+version: 2
+
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "05:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    groups:
+      actions-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Covers pyproject.toml and uv.lock: the runtime extras and the dev
+  # dependency group. Dependabot updates the lockfile in the same pull request,
+  # which is what keeps the audit and wheel jobs meaningful.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "05:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "python"
+    groups:
+      python-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
