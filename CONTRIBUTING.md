@@ -26,18 +26,17 @@ SQLite or a mock, and tests that pretend otherwise are worse than no tests.
 make lint typecheck format-check test
 ```
 
-CI runs the same gates across Python 3.11-3.14, explicitly covers Django 5.2 LTS and
-Django 6.0, and runs an installed-wheel smoke test. `make wheel-smoke` runs that last one locally if you have
+CI tests Python 3.11-3.14, Django 5.2 LTS and the current Django 6.x release, and
+the current Huey 3.x release. It also runs an installed-wheel smoke test. `make wheel-smoke` runs that last one locally if you have
 touched packaging, imports, or anything in `src/dewey/django/migrations/`.
 
 ### Which CI jobs can fail your pull request
 
-Blocking: the 3.11-3.14 test matrix, coverage, the wheel smoke test, the build, and
-`audit (runtime, blocking)`.
+Blocking: static checks, the four-lane compatibility matrix, the installed-wheel smoke,
+and the runtime portion of `Dependency audit`. One matrix lane uploads coverage.
 
-Advisory (`continue-on-error`, red without blocking a merge):
-
-- **`audit (dev tooling, advisory)`.** A CVE in ruff or a pytest plugin ships to nobody.
+Advisory: the development-tooling step within `Dependency audit`. A CVE in ruff or a
+pytest plugin ships to nobody.
 
 The audit is split by who is exposed, using two separate `uv export` runs rather than
 filtering one report: `--no-dev --all-extras` is what users install, so an advisory there

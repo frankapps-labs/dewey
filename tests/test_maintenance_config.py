@@ -5,14 +5,11 @@ These are not tests of Dewey's behaviour; they are tests of claims. Two kinds of
 claim can rot silently and neither shows up in a normal test run:
 
 * **Advertised support.** Every Python classifier must have a blocking matrix lane.
-* **Gate strength.** The audit split only means something if the runtime half
-  actually blocks and the version matrix keeps its floor. A refactor that adds
-  `continue-on-error: true` to the wrong job is invisible on a green run.
+* **Gate strength.** Runtime auditing must block, while development-tool
+  advisories remain visible without blocking unrelated product work.
 
-Parsing is deliberately textual: the assertions are about lines a reviewer reads
-(`continue-on-error: true`, a python-version list), and PyYAML is not a project
-dependency. A stdlib-only structural check always runs; the full YAML parse runs
-only where PyYAML happens to be importable.
+Most assertions are deliberately textual because they protect lines a reviewer reads.
+PyYAML also parses every GitHub configuration file so malformed workflow syntax fails CI.
 """
 
 import re
@@ -67,17 +64,16 @@ def test_supported_python_versions_are_classified():
 
 def test_gating_matrix_still_covers_every_supported_version():
     block = job_block(CI, "test")
-    match = re.search(r"python-version: \[(.*?)\]", block)
-    assert match is not None, "the test job no longer declares a python-version matrix"
-    versions = re.findall(r'"([^"]+)"', match.group(1))
+    versions = re.findall(r'^\s+- python-version: "([^"]+)"$', block, re.MULTILINE)
     assert versions == ["3.11", "3.12", "3.13", "3.14"], (
         "the blocking matrix changed; update the classifiers and this guard together"
     )
 
 
 def test_gating_jobs_are_not_advisory():
-    for job in ("test", "coverage", "wheel-smoke", "build", "audit-runtime"):
-        assert "continue-on-error" not in job_block(CI, job), f"{job} must remain a gate"
+    for job in ("checks", "test", "wheel-smoke", "audit"):
+        header = "\n".join(job_block(CI, job).splitlines()[:12])
+        assert "continue-on-error" not in header, f"{job} must remain a gate"
 
 
 # --- Dependency audit split ------------------------------------------------
@@ -85,19 +81,16 @@ def test_gating_jobs_are_not_advisory():
 
 def test_runtime_audit_scope_comes_from_its_own_export():
     """Runtime scope must be a separate export, not a filtered combined report."""
-    block = job_block(CI, "audit-runtime")
+    block = job_block(CI, "audit")
     assert "--no-dev" in block and "--all-extras" in block
-    assert "pip-audit" in block
-    assert "--only-dev" not in block
-    # Environment markers split the runtime graph across Django lines; audit both ends.
-    assert re.search(r'python-version: \["3\.11", "3\.13"\]', block)
+    assert "uvx --python 3.11 pip-audit" in block
+    assert "uvx --python 3.14 pip-audit" in block
 
 
 def test_dev_audit_stays_advisory_and_dev_scoped():
-    block = job_block(CI, "audit-dev")
-    assert "continue-on-error: true" in block
+    block = job_block(CI, "audit")
     assert "--only-dev" in block
-    assert "pip-audit" in block
+    assert re.search(r"- name: Audit development tooling\n\s+continue-on-error: true", block)
 
 
 # --- Security workflows ----------------------------------------------------

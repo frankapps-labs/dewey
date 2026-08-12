@@ -427,7 +427,7 @@ requires-dist = [
     { name = "asyncpg", marker = "extra == 'async'", specifier = ">=0.30.0" },
     { name = "django", marker = "python_full_version >= '3.12' and extra == 'django'", specifier = ">=6.0.7,<7" },
     { name = "django", marker = "python_full_version < '3.12' and extra == 'django'", specifier = ">=5.2.16,<6" },
-    { name = "huey", marker = "extra == 'huey'", specifier = ">=2.5" },
+    { name = "huey", marker = "extra == 'huey'", specifier = ">=3,<4" },
     { name = "sqlalchemy", marker = "extra == 'sqlalchemy'", specifier = ">=2.0" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'async'", specifier = ">=2.0" },
 ]
@@ -440,7 +440,7 @@ dev = [
     { name = "basedpyright", specifier = ">=1.31.0" },
     { name = "django", marker = "python_full_version < '3.12'", specifier = ">=5.2.16,<6" },
     { name = "django", marker = "python_full_version >= '3.12'", specifier = ">=6.0.7,<7" },
-    { name = "huey", specifier = ">=2.5" },
+    { name = "huey", specifier = ">=3,<4" },
     { name = "psycopg2-binary", specifier = ">=2.9" },
     { name = "pytest", specifier = ">=7.0" },
     { name = "pytest-asyncio", specifier = ">=0.24.0" },
