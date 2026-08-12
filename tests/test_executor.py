@@ -2,14 +2,15 @@
 
 import threading
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
+import dewey.sqlalchemy.executor as executor_module
 from dewey.core.states import TaskStatus
-from dewey.sqlalchemy.executor import create_task, process_task
+from dewey.sqlalchemy.executor import create_or_get_task, create_task, process_task
 from dewey.sqlalchemy.models import TaskEntryModel
 
 
@@ -79,6 +80,75 @@ class TestCreateTask:
             metadata={"source": "api", "version": 2},
         )
         assert task.task_metadata == {"source": "api", "version": 2}
+
+
+class TestScheduledForValidation:
+    """Naive scheduled_for fails fast — exact error, no row written, no NOTIFY sent."""
+
+    def _spy_notifications(self, monkeypatch):
+        notifications = []
+        monkeypatch.setattr(
+            executor_module,
+            "notify_work_available",
+            lambda *args, **kwargs: notifications.append((args, kwargs)),
+        )
+        return notifications
+
+    def test_create_task_rejects_naive_before_row_or_notify(self, session, monkeypatch):
+        notifications = self._spy_notifications(monkeypatch)
+        with pytest.raises(ValueError) as excinfo:
+            create_task(session, task_type="reminder.send", scheduled_for=datetime.now())
+        assert str(excinfo.value) == "scheduled_for must be a timezone-aware datetime"
+        assert notifications == []
+        assert session.query(TaskEntryModel).count() == 0
+
+    def test_create_or_get_task_rejects_naive_before_row_or_notify(self, session, monkeypatch):
+        notifications = self._spy_notifications(monkeypatch)
+        with pytest.raises(ValueError) as excinfo:
+            create_or_get_task(
+                session,
+                task_type="reminder.send",
+                idempotency_key="reminder-naive",
+                scheduled_for=datetime.now(),
+            )
+        assert str(excinfo.value) == "scheduled_for must be a timezone-aware datetime"
+        assert notifications == []
+        assert session.query(TaskEntryModel).count() == 0
+
+    @pytest.mark.parametrize(
+        "scheduled_for",
+        [
+            None,
+            datetime(2026, 12, 1, tzinfo=UTC),
+            datetime(2026, 12, 1, tzinfo=timezone(timedelta(hours=5, minutes=30))),
+        ],
+        ids=["none", "utc", "offset"],
+    )
+    def test_create_task_accepts_aware_and_none(self, session, scheduled_for):
+        task = create_task(session, task_type="reminder.send", scheduled_for=scheduled_for)
+        session.refresh(task)
+        assert task.scheduled_for == scheduled_for
+        assert session.query(TaskEntryModel).count() == 1
+
+    @pytest.mark.parametrize(
+        "scheduled_for",
+        [
+            None,
+            datetime(2026, 12, 1, tzinfo=UTC),
+            datetime(2026, 12, 1, tzinfo=timezone(timedelta(hours=5, minutes=30))),
+        ],
+        ids=["none", "utc", "offset"],
+    )
+    def test_create_or_get_task_accepts_aware_and_none(self, session, scheduled_for):
+        task = create_or_get_task(
+            session,
+            task_type="reminder.send",
+            idempotency_key=f"reminder-aware-{scheduled_for!s}",
+            scheduled_for=scheduled_for,
+        )
+        session.refresh(task)
+        assert task.scheduled_for == scheduled_for
+        assert session.query(TaskEntryModel).count() == 1
 
 
 class TestProcessTask:

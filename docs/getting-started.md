@@ -162,6 +162,9 @@ with transaction.atomic():
     )
 ```
 
+Both `scheduled_for` and `expires_at` must be timezone-aware datetimes; `None` means no
+schedule or deadline. Dewey rejects naive wall-clock values before writing a row.
+
 If the block rolls back, the task row and its wake-up go with it. Postgres holds the
 notification until commit, so there is no window in which a dispatcher can see work that
 never happened — and no `on_commit` callback for you to remember.
