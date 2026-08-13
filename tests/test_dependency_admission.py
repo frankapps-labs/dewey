@@ -32,7 +32,7 @@ def first_registry_package(lock):
 
 def test_current_dependency_graph_is_structurally_admitted():
     assert dependency_admission.validate_lock(current_lock()) == []
-    assert dependency_admission.validate_requirements(current_project()) == []
+    assert dependency_admission.validate_requirements(current_project(), current_lock()) == []
     assert dependency_admission.validate_actions() == []
 
 
@@ -73,7 +73,8 @@ def test_direct_url_requirement_is_rejected():
     )
 
     assert any(
-        "direct URL/path" in error for error in dependency_admission.validate_requirements(project)
+        "direct URL/path" in error
+        for error in dependency_admission.validate_requirements(project, current_lock())
     )
 
 
@@ -135,7 +136,7 @@ def test_seven_day_old_artifact_is_admitted(tmp_path):
 
 def test_hotfix_label_requires_structured_rationale_and_upstream(tmp_path):
     event = tmp_path / "event.json"
-    write_event(event, labels=[dependency_admission.HOTFIX_LABEL], body="urgent")
+    write_event(event, labels=[dependency_admission.DEFAULT_HOTFIX_LABEL], body="urgent")
 
     admitted, reason = dependency_admission.hotfix_exception(str(event))
 
@@ -149,7 +150,7 @@ def test_complete_hotfix_evidence_bypasses_age_only(tmp_path):
     event = tmp_path / "event.json"
     write_event(
         event,
-        labels=[dependency_admission.HOTFIX_LABEL],
+        labels=[dependency_admission.DEFAULT_HOTFIX_LABEL],
         body="Hotfix rationale: fixes active breakage\nUpstream: https://example.com/fix",
     )
 
@@ -162,6 +163,127 @@ def test_complete_hotfix_evidence_bypasses_age_only(tmp_path):
         )
         == []
     )
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "      - uses : owner/action@" + "a" * 40,
+        "      - 'uses': owner/action@" + "a" * 40,
+        "      - {uses: owner/action@" + "a" * 40 + "}",
+    ],
+)
+def test_noncanonical_action_yaml_fails_closed(line):
+    path = ROOT / ".github" / "workflows" / "adversarial.yml"
+
+    _, errors = dependency_admission.parse_actions(path, f"jobs:\n  test:\n    steps:\n{line}\n")
+
+    assert any("non-canonical or unparseable uses syntax" in error for error in errors)
+
+
+def test_exact_build_backends_must_be_in_the_admitted_build_group():
+    project = deepcopy(current_project())
+    project["build-system"]["requires"][0] = "setuptools>=61"
+
+    errors = dependency_admission.validate_requirements(project, current_lock())
+
+    assert any("exactly match dependency group" in error for error in errors)
+    assert any("exact pin" in error for error in errors)
+
+
+def test_canonical_pypi_metadata_rejects_backdated_lock(monkeypatch):
+    package = deepcopy(first_registry_package(current_lock()))
+    artifact = package.get("sdist") or package["wheels"][0]
+    canonical_time = "2026-08-12T12:00:00.123456Z"
+    artifact["upload-time"] = "2026-01-01T00:00:00Z"
+    digest = artifact["hash"].removeprefix("sha256:")
+    monkeypatch.setattr(
+        dependency_admission,
+        "request_json",
+        lambda _url: {
+            "urls": [
+                {
+                    "url": artifact["url"],
+                    "digests": {"sha256": digest},
+                    "upload_time_iso_8601": canonical_time,
+                }
+            ]
+        },
+    )
+    package["wheels"] = []
+    package["sdist"] = artifact
+
+    errors, uploaded = dependency_admission.verify_pypi_package(package)
+
+    assert uploaded == dependency_admission.uv_timestamp(canonical_time)
+    assert any("timestamp disagrees" in error for error in errors)
+
+
+def test_canonical_pypi_metadata_rejects_digest_mismatch(monkeypatch):
+    package = deepcopy(first_registry_package(current_lock()))
+    artifact = package.get("sdist") or package["wheels"][0]
+    monkeypatch.setattr(
+        dependency_admission,
+        "request_json",
+        lambda _url: {
+            "urls": [
+                {
+                    "url": artifact["url"],
+                    "digests": {"sha256": "0" * 64},
+                    "upload_time_iso_8601": artifact["upload-time"],
+                }
+            ]
+        },
+    )
+    package["wheels"] = []
+    package["sdist"] = artifact
+
+    errors, _ = dependency_admission.verify_pypi_package(package)
+
+    assert any("digest disagrees" in error for error in errors)
+
+
+def test_canonical_github_metadata_rejects_commit_mismatch(monkeypatch):
+    commit = "a" * 40
+    monkeypatch.setattr(
+        dependency_admission,
+        "request_json",
+        lambda _url: {
+            "sha": "b" * 40,
+            "commit": {"committer": {"date": "2026-01-01T00:00:00Z"}},
+        },
+    )
+
+    errors, committed = dependency_admission.verify_github_action("owner/action", commit)
+
+    assert committed is None
+    assert errors == [f"owner/action@{commit}: canonical GitHub commit mismatch"]
+
+
+def test_fresh_action_commit_requires_hotfix_evidence(monkeypatch):
+    now = datetime(2026, 8, 13, tzinfo=UTC)
+    lock = current_lock()
+    monkeypatch.setattr(
+        dependency_admission,
+        "action_changes",
+        lambda _base: ([("owner/action", "a" * 40)], []),
+    )
+    monkeypatch.setattr(
+        dependency_admission,
+        "verify_github_action",
+        lambda _action, _commit: ([], now - timedelta(days=1)),
+    )
+
+    errors = dependency_admission.validate_cooldown(
+        lock,
+        deepcopy(lock),
+        now=now,
+        event_path=None,
+        verify_canonical=True,
+        include_actions=True,
+    )
+
+    assert any("owner/action" in error and "only 1.0 days old" in error for error in errors)
 
 
 def test_inventory_calls_out_hash_only_artifact_changes():
@@ -177,6 +299,7 @@ def test_inventory_calls_out_hash_only_artifact_changes():
         base,
         current_project(),
         current_project(),
+        project_package="dewey",
     )
 
     assert any(
@@ -196,6 +319,7 @@ def test_inventory_calls_out_new_transitive_packages():
         base,
         current_project(),
         current_project(),
+        project_package="dewey",
     )
 
     assert any(

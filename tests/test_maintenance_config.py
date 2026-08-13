@@ -78,11 +78,16 @@ def test_django_5_2_is_supported_on_python_3_12():
     assert project["optional-dependencies"]["django"] == ["Django>=5.2.16,<7"]
     assert project["optional-dependencies"]["huey"] == ["huey>=3,<4"]
 
+    project_config = pyproject()
+    assert project_config["dependency-groups"]["compat-py312-django52"] == [
+        "Django==5.2.16; python_version == '3.12'",
+        "huey==3.0.0; python_version == '3.12'",
+    ]
     block = job_block(CI, "test")
     assert re.search(
-        r'- python-version: "3\.12"\n\s+django-requirement: "Django~=5\.2\.0"',
+        r'- python-version: "3\.12"\n\s+compatibility-group: "compat-py312-django52"',
         block,
-    ), "the Python 3.12 + Django 5.2 compatibility lane is required"
+    ), "the Python 3.12 + Django 5.2 admitted lock lane is required"
 
 
 def test_gating_jobs_are_not_advisory():
@@ -97,6 +102,39 @@ def test_dependency_installing_jobs_wait_for_admission():
         assert "needs: audit" in header, f"{job} must not install before dependency admission"
 
 
+def test_execution_paths_use_only_admitted_lock_inputs():
+    ci = CI.read_text()
+    publish = (WORKFLOWS / "publish.yml").read_text()
+    wheel_smoke = (REPO_ROOT / "scripts" / "wheel_smoke.sh").read_text()
+    import_matrix = (REPO_ROOT / "scripts" / "optional_import_matrix.sh").read_text()
+    sync_env = (REPO_ROOT / "scripts" / "sync_admitted_env.sh").read_text()
+
+    combined = "\n".join((ci, publish, wheel_smoke, import_matrix, sync_env))
+    assert "uvx " not in combined
+    assert "pip install --quiet --upgrade pip" not in combined
+    assert "uv pip install --upgrade" not in combined
+    assert "uv build\n" not in combined
+    assert "VIRTUAL_ENV=.release-venv uv build --no-build-isolation" in ci
+    assert "VIRTUAL_ENV=.release-venv uv build --no-build-isolation" in publish
+    assert "sync_admitted_env.sh .release-venv 3.12 group:release" in ci
+    assert "sync_admitted_env.sh .release-venv 3.12 group:release" in publish
+    assert "--require-hashes" in sync_env
+    assert ".venv/bin/ruff" in ci
+    assert ".venv/bin/basedpyright" in ci
+    assert "uv run ruff" not in ci
+    assert "uv run basedpyright" not in ci
+    assert "--no-deps --no-build" in wheel_smoke
+    assert "--no-deps --no-build" in import_matrix
+
+
+def test_uv_tool_version_is_pinned_everywhere():
+    project = pyproject()
+    expected = project["tool"]["dependency-admission"]["uv-version"]
+    for path in WORKFLOWS.glob("*.yml"):
+        text = path.read_text()
+        assert text.count("setup-uv@") == text.count(f'version: "{expected}"')
+
+
 def test_hotfix_label_or_body_edit_retriggers_admission():
     trigger = CI.read_text().split("permissions:", 1)[0]
     for event in ("labeled", "unlabeled", "edited", "synchronize"):
@@ -106,14 +144,18 @@ def test_hotfix_label_or_body_edit_retriggers_admission():
 # --- Dependency audit split ------------------------------------------------
 
 
+def test_local_dependency_gate_enforces_canonical_cooldown():
+    assert "scripts/dependency_admission.py --enforce-cooldown" in MAKEFILE.read_text()
+
+
 def test_runtime_audit_scope_comes_from_its_own_export():
     """Runtime scope must be a separate export, not a filtered combined report."""
     block = job_block(CI, "audit")
     assert "scripts/dependency_admission.py" in block
     assert "uv lock --check" in block
     assert "--no-dev" in block and "--all-extras" in block
-    assert "uv run --isolated --locked --python 3.11 pip-audit" in block
-    assert "uv run --isolated --locked --python 3.14 pip-audit" in block
+    assert "sync_admitted_env.sh .audit-py311 3.11 group:audit" in block
+    assert "sync_admitted_env.sh .audit-py314 3.14 group:audit" in block
     assert "uvx" not in block, "the vulnerability scanner must come from uv.lock"
 
 
@@ -121,7 +163,7 @@ def test_dev_audit_stays_advisory_and_dev_scoped():
     block = job_block(CI, "audit")
     assert "--only-dev" in block
     assert re.search(r"- name: Audit development tooling\n\s+continue-on-error: true", block)
-    assert "uv run --isolated --locked pip-audit" in block
+    assert ".audit-py314/bin/pip-audit" in block
 
 
 # --- Security workflows ----------------------------------------------------
@@ -161,10 +203,22 @@ def test_ci_workflow_is_read_only_by_default():
 
 
 def test_trusted_publishing_is_preserved():
-    """Releases authenticate with OIDC. A password or API token would be a regression."""
-    text = (WORKFLOWS / "publish.yml").read_text()
-    assert "id-token: write" in text
-    assert "pypa/gh-action-pypi-publish@" in text
+    """OIDC is isolated to an artifact-only job that never executes project dependencies."""
+    path = WORKFLOWS / "publish.yml"
+    text = path.read_text()
+    build = job_block(path, "build")
+    publish = job_block(path, "publish")
+
+    assert "id-token: write" not in build
+    assert "VIRTUAL_ENV=.release-venv uv build --no-build-isolation" in build
+    assert "sync_admitted_env.sh .release-venv 3.12 group:release" in build
+    assert "id-token: write" in publish
+    assert "actions/download-artifact@" in publish
+    assert "actions/checkout@" not in publish
+    assert "setup-python@" not in publish
+    assert "setup-uv@" not in publish
+    assert "uv " not in publish
+    assert "pypa/gh-action-pypi-publish@" in publish
     assert "password" not in text
     assert "PYPI_API_TOKEN" not in text
 

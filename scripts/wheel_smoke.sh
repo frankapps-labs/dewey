@@ -25,13 +25,13 @@ if [[ -z "$WHEEL" ]]; then
 fi
 echo "==> Wheel under test: $(basename "$WHEEL")"
 
-echo "==> Creating a clean virtualenv (no access to the source tree)"
-python3 -m venv "$WORK_DIR/venv"
+echo "==> Creating a hash-locked environment (no access to the source tree)"
+"$REPO_ROOT/scripts/sync_admitted_env.sh" "$WORK_DIR/venv" "$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" \
+  extra:sqlalchemy extra:async extra:django extra:huey group:wheel-smoke >/dev/null
 VENV_PY="$WORK_DIR/venv/bin/python"
-"$VENV_PY" -m pip install --quiet --upgrade pip
 
-echo "==> Installing the wheel with every advertised extra"
-"$VENV_PY" -m pip install --quiet "${WHEEL}[sqlalchemy,async,django,huey]" psycopg2-binary redis
+echo "==> Installing only the local wheel; dependencies are already admitted"
+uv pip install --python "$VENV_PY" --no-deps --no-build "$WHEEL" >/dev/null
 
 # Run from a scratch directory so a stray `import dewey` cannot resolve to ./src.
 cp "$REPO_ROOT/scripts/wheel_smoke.py" "$WORK_DIR/wheel_smoke.py"

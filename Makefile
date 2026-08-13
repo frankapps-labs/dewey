@@ -67,18 +67,20 @@ test-cov:
 	uv run pytest --cov=dewey --cov-report=term-missing --cov-report=html
 
 dependency-check:
-	python3 scripts/dependency_admission.py
+	python3 scripts/dependency_admission.py --enforce-cooldown
 	uv lock --check
 	@set -e; tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
 	uv export --locked --format requirements-txt --no-hashes --no-emit-project \
 		--no-dev --all-extras > "$$tmp/requirements-runtime.txt"; \
 	uv export --locked --format requirements-txt --no-hashes --no-emit-project \
 		--only-dev > "$$tmp/requirements-dev.txt"; \
-	uv run --isolated --locked --python 3.11 pip-audit \
+	./scripts/sync_admitted_env.sh "$$tmp/audit-py311" 3.11 group:audit >/dev/null; \
+	./scripts/sync_admitted_env.sh "$$tmp/audit-py314" 3.14 group:audit >/dev/null; \
+	"$$tmp/audit-py311/bin/pip-audit" \
 		--no-deps --disable-pip -r "$$tmp/requirements-runtime.txt"; \
-	uv run --isolated --locked --python 3.14 pip-audit \
+	"$$tmp/audit-py314/bin/pip-audit" \
 		--no-deps --disable-pip -r "$$tmp/requirements-runtime.txt"; \
-	uv run --isolated --locked pip-audit \
+	"$$tmp/audit-py314/bin/pip-audit" \
 		--no-deps --disable-pip -r "$$tmp/requirements-dev.txt" || \
 		echo "Development-tool advisories are visible but non-blocking."
 
@@ -101,7 +103,10 @@ clean:
 	find . -type f -name "*.pyc" -delete
 
 build: clean
-	uv build
+	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	./scripts/sync_admitted_env.sh "$$tmp/release" 3.12 group:release >/dev/null; \
+	VIRTUAL_ENV="$$tmp/release" uv build --no-build-isolation; \
+	"$$tmp/release/bin/twine" check dist/*
 	@ls -lh dist/
 
 publish-test: build

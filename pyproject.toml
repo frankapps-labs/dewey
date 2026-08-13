@@ -1,5 +1,7 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+# Exact, cooled build backends. Keep these equal to dependency-groups.build;
+# release and CI builds run without isolation from that admitted lock.
+requires = ["setuptools==83.0.0", "wheel==0.47.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -47,6 +49,46 @@ huey = [
 ]
 
 [dependency-groups]
+build = [
+    "setuptools==83.0.0",
+    "wheel==0.47.0",
+]
+release = [
+    "setuptools==83.0.0",
+    "wheel==0.47.0",
+    "twine==6.2.0",
+]
+audit = [
+    "pip-audit==2.10.1",
+    # Cooled transitive ceilings keep the scanner graph outside the seven-day
+    # window as of 2026-08-13.
+    "cyclonedx-python-lib==11.11.0",
+    "platformdirs==4.11.0",
+]
+wheel-smoke = [
+    "psycopg2-binary==2.9.12",
+    "redis==8.1.0",
+]
+compat-py311-django52 = [
+    "Django==5.2.16; python_version == '3.11'",
+    "huey==3.0.0; python_version == '3.11'",
+]
+compat-py312-django52 = [
+    "Django==5.2.16; python_version == '3.12'",
+    "huey==3.0.0; python_version == '3.12'",
+]
+compat-py312-django60 = [
+    "Django==6.0.7; python_version == '3.12'",
+    "huey==3.0.0; python_version == '3.12'",
+]
+compat-py313-django60 = [
+    "Django==6.0.7; python_version == '3.13'",
+    "huey==3.0.0; python_version == '3.13'",
+]
+compat-py314-django60 = [
+    "Django==6.0.7; python_version == '3.14'",
+    "huey==3.0.0; python_version == '3.14'",
+]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.1",
@@ -54,7 +96,6 @@ dev = [
     "pytest-asyncio>=0.24.0",
     "ruff>=0.1.0",
     "basedpyright>=1.31.0",
-    "twine>=6.0",
     "sqlalchemy[asyncio]>=2.0",
     "asyncpg>=0.30.0",
     "aiosqlite>=0.21.0",
@@ -64,11 +105,6 @@ dev = [
     "psycopg2-binary>=2.9",
     "huey>=3,<4",
     "pyyaml>=6.0",
-    # The audit scanner is itself admitted and locked. These transitive ceilings
-    # keep its graph outside the seven-day cooling window as of 2026-08-13.
-    "pip-audit>=2.10,<3",
-    "cyclonedx-python-lib>=11.11,<11.11.1",
-    "platformdirs>=4.11,<4.11.1",
 ]
 
 [project.urls]
@@ -79,6 +115,22 @@ Repository = "https://github.com/frankapps-labs/dewey"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.dependency-admission]
+project-package = "dewey"
+build-group = "build"
+cooldown-days = 7
+hotfix-label = "dependency-hotfix"
+uv-version = "0.10.12"
+
+[tool.uv]
+conflicts = [[
+    {group = "compat-py311-django52"},
+    {group = "compat-py312-django52"},
+    {group = "compat-py312-django60"},
+    {group = "compat-py313-django60"},
+    {group = "compat-py314-django60"},
+]]
 
 [tool.pytest.ini_options]
 pythonpath = ["src", "."]
