@@ -33,6 +33,8 @@ DB_HOST = parsed.hostname or "localhost"
 DB_PORT = parsed.port or 5432
 DB_USER = parsed.username or "postgres"
 DB_PASSWORD = parsed.password or "postgres"
+redis_parsed = urlparse(REDIS_URL)
+REDIS_ENDPOINT = f"{redis_parsed.hostname or 'localhost'}:{redis_parsed.port or 6379}"
 
 failures: list[str] = []
 
@@ -46,6 +48,9 @@ def check(label: str, condition: bool, detail: str = "") -> None:
 
 
 def recreate_database() -> None:
+    if not DB_NAME.endswith("_smoke"):
+        raise ValueError("DEWEY_SMOKE_DB_NAME must end with '_smoke'")
+
     import psycopg2
     from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
@@ -63,7 +68,6 @@ def recreate_database() -> None:
 def configure_django() -> None:
     import django
     from django.conf import settings
-
     from huey import MemoryHuey
 
     settings.configure(
@@ -131,9 +135,9 @@ def main() -> int:
     check("migrate created task_entries", TaskEntry.objects.count() == 0)
 
     import dewey
+    from dewey.contrib.django_huey import dispatch as contrib_dispatch
     from dewey.dispatcher import Dispatcher
     from dewey.django.dispatch import DjangoDispatchBackend
-    from dewey.contrib.django_huey import dispatch as contrib_dispatch
     from dewey.django.executor import create_or_get_task, create_task
     from dewey.errors import IdempotencyConflictError
 
@@ -150,6 +154,31 @@ def main() -> int:
     check(
         "preferred contrib dispatch is module-level",
         callable(__import__("dewey.django.conf", fromlist=["get_dispatch_fn"]).get_dispatch_fn()),
+    )
+
+    print("--> producer validation from the installed wheel")
+    before_validation = TaskEntry.objects.count()
+    for producer, kwargs in (
+        (create_task, {}),
+        (create_or_get_task, {"idempotency_key": "smoke-naive-schedule"}),
+    ):
+        try:
+            producer(
+                task_type="smoke.notify",
+                scheduled_for=datetime.now(),
+                **kwargs,
+            )
+        except ValueError as exc:
+            check(
+                f"{producer.__name__} rejects a naive schedule",
+                str(exc) == "scheduled_for must be a timezone-aware datetime",
+                f"message={exc!s}",
+            )
+        else:
+            check(f"{producer.__name__} rejects a naive schedule", False)
+    check(
+        "invalid schedules leave no task row",
+        TaskEntry.objects.count() == before_validation,
     )
 
     print("--> happy path: create, dispatch, process, complete")
@@ -269,7 +298,7 @@ def main() -> int:
     try:
         huey.storage.flush_queue()
     except Exception as exc:  # pragma: no cover — surfaced, not swallowed
-        print(f"    FAIL could not reach Redis at {REDIS_URL}: {exc}")
+        print(f"    FAIL could not reach Redis at {REDIS_ENDPOINT}: {exc}")
         failures.append("redis reachable")
     else:
         real_dispatcher = Dispatcher(backend, dispatch, sweep_interval_seconds=None)
