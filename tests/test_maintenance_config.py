@@ -22,6 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 CI = WORKFLOWS / "ci.yml"
 DEPENDABOT = REPO_ROOT / ".github" / "dependabot.yml"
+MAKEFILE = REPO_ROOT / "Makefile"
 
 
 @pytest.fixture(autouse=True)
@@ -148,6 +149,20 @@ def test_trusted_publishing_is_preserved():
     assert "pypa/gh-action-pypi-publish@" in text
     assert "password" not in text
     assert "PYPI_API_TOKEN" not in text
+
+
+def test_release_target_tags_only_exact_origin_main():
+    text = MAKEFILE.read_text()
+    release = text[text.index("release:") : text.index("_check-clean:")]
+    release_head = text[text.index("_check-release-head:") : text.index("ci:")]
+
+    assert "_check-release-head" in release
+    assert "git fetch --quiet origin main --tags" in release_head
+    assert "git rev-parse origin/main" in release_head
+    assert 'git tag -a "$$TAG"' in release
+    assert 'git push origin "refs/tags/$$TAG"' in release
+    assert "git push --tags" not in release
+    assert "git push &&" not in release
 
 
 # --- Dependabot ------------------------------------------------------------
