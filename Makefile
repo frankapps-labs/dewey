@@ -67,9 +67,11 @@ test-cov:
 	uv run pytest --cov=dewey --cov-report=term-missing --cov-report=html
 
 dependency-check:
-	python3 scripts/dependency_admission.py --enforce-cooldown
+	python3 scripts/dependency_admission.py --preflight --enforce-cooldown
 	uv lock --check
 	@set -e; tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	./scripts/sync_admitted_env.sh "$$tmp/admission" 3.13 group:admission >/dev/null; \
+	"$$tmp/admission/bin/python" scripts/dependency_admission.py --enforce-cooldown; \
 	uv export --locked --format requirements-txt --no-hashes --no-emit-project \
 		--no-dev --all-extras > "$$tmp/requirements-runtime.txt"; \
 	uv export --locked --format requirements-txt --no-hashes --no-emit-project \

@@ -28,7 +28,9 @@ jobs:
 
       - name: Validate admitted release inputs
         run: |
-          python scripts/dependency_admission.py --base-ref HEAD^
+          python scripts/dependency_admission.py --preflight --base-ref HEAD^
+          ./scripts/sync_admitted_env.sh .admission-venv 3.12 group:admission
+          .admission-venv/bin/python scripts/dependency_admission.py --base-ref HEAD^
           uv lock --check
 
       - name: Build from admitted backends without isolation

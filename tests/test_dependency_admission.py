@@ -172,6 +172,7 @@ def test_complete_hotfix_evidence_bypasses_age_only(tmp_path):
         "      - 'uses': owner/action@" + "a" * 40,
         "      - {uses: owner/action@" + "a" * 40 + "}",
         "      - ? uses\n        : owner/action@" + "a" * 40,
+        '      - "\\x75ses": owner/action@' + "a" * 40,
     ],
 )
 def test_noncanonical_action_yaml_fails_closed(line):
@@ -179,7 +180,36 @@ def test_noncanonical_action_yaml_fails_closed(line):
 
     _, errors = dependency_admission.parse_actions(path, f"jobs:\n  test:\n    steps:\n{line}\n")
 
-    assert any("non-canonical or unparseable uses syntax" in error for error in errors)
+    assert any("non-canonical uses mapping syntax" in error for error in errors)
+
+
+def test_ordinary_scalar_containing_uses_is_not_an_action():
+    path = ROOT / ".github" / "workflows" / "adversarial.yml"
+    text = "jobs:\n  test:\n    name: This job uses the cache\n    steps: []\n"
+
+    actions, errors = dependency_admission.parse_actions(path, text)
+
+    assert actions == {}
+    assert errors == []
+
+
+def test_structural_action_parser_extracts_canonical_pinned_reference():
+    path = ROOT / ".github" / "workflows" / "adversarial.yml"
+    commit = "a" * 40
+    text = f"jobs:\n  test:\n    steps:\n      - uses: owner/action@{commit}\n"
+
+    actions, errors = dependency_admission.parse_actions(path, text)
+
+    assert actions == {".github/workflows/adversarial.yml:owner/action:1": commit}
+    assert errors == []
+
+
+def test_malformed_workflow_yaml_fails_closed():
+    path = ROOT / ".github" / "workflows" / "adversarial.yml"
+
+    _, errors = dependency_admission.parse_actions(path, "jobs: [unterminated\n")
+
+    assert any("invalid workflow YAML" in error for error in errors)
 
 
 def test_exact_build_backends_must_be_in_the_admitted_build_group():
@@ -190,6 +220,15 @@ def test_exact_build_backends_must_be_in_the_admitted_build_group():
 
     assert any("exactly match dependency group" in error for error in errors)
     assert any("exact pin" in error for error in errors)
+
+
+def test_admission_yaml_parser_must_be_the_exact_locked_pin():
+    project = deepcopy(current_project())
+    project["dependency-groups"]["admission"] = ["PyYAML>=6"]
+
+    errors = dependency_admission.validate_requirements(project, current_lock())
+
+    assert any("must exactly pin PyYAML" in error for error in errors)
 
 
 def test_canonical_pypi_metadata_rejects_backdated_lock(monkeypatch):

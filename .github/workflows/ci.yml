@@ -233,9 +233,9 @@ jobs:
         with:
           version: "0.10.12"
 
-      # Runs before dependency sync in this job. The checker uses only Python's
-      # standard library, so it can reject unadmitted sources and missing hashes
-      # without importing newly selected dependency code.
+      # The standard-library preflight admits lock sources, hashes, exact parser pin,
+      # and changed PyPI metadata before the parser is installed. The full pass then
+      # composes workflow YAML structurally from that hash-locked parser environment.
       - name: Validate dependency admission
         env:
           DEWEY_ADMISSION_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -245,7 +245,9 @@ jobs:
           if [[ "$DEWEY_ENFORCE_COOLDOWN" == "true" ]]; then
             args+=(--enforce-cooldown)
           fi
-          python scripts/dependency_admission.py "${args[@]}"
+          python scripts/dependency_admission.py --preflight "${args[@]}"
+          ./scripts/sync_admitted_env.sh .admission-venv 3.13 group:admission
+          .admission-venv/bin/python scripts/dependency_admission.py "${args[@]}"
           uv lock --check
 
       - name: Export locked dependency sets

@@ -533,6 +533,9 @@ sqlalchemy = [
 ]
 
 [package.dev-dependencies]
+admission = [
+    { name = "pyyaml" },
+]
 audit = [
     { name = "cyclonedx-python-lib" },
     { name = "pip-audit" },
@@ -599,6 +602,7 @@ requires-dist = [
 provides-extras = ["sqlalchemy", "async", "django", "huey"]
 
 [package.metadata.requires-dev]
+admission = [{ name = "pyyaml", specifier = "==6.0.3" }]
 audit = [
     { name = "cyclonedx-python-lib", specifier = "==11.11.0" },
     { name = "pip-audit", specifier = "==2.10.1" },
@@ -639,7 +643,7 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=0.24.0" },
     { name = "pytest-cov", specifier = ">=4.1" },
     { name = "pytest-django", specifier = ">=4.5" },
-    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "pyyaml", specifier = "==6.0.3" },
     { name = "ruff", specifier = ">=0.1.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
 ]

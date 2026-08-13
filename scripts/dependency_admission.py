@@ -23,7 +23,6 @@ PYPI_REGISTRY = "https://pypi.org/simple"
 PYPI_FILES = "https://files.pythonhosted.org/packages/"
 SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 ACTION_PIN = re.compile(r"^\s*(?:-\s*)?uses:\s+([^\s#]+)(?:\s+#.*)?$")
-ANY_USES = re.compile(r"\buses\b")
 FULL_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 EXACT_REQUIREMENT = re.compile(r"^([A-Za-z0-9_.-]+)==([^;\s]+)$")
 DEFAULT_COOLDOWN_DAYS = 7
@@ -41,6 +40,7 @@ def admission_config(project: dict[str, Any]) -> dict[str, Any]:
     return {
         "project_package": configured.get("project-package", project["project"]["name"]),
         "build_group": configured.get("build-group", "build"),
+        "parser_group": configured.get("parser-group", "admission"),
         "cooldown_days": int(configured.get("cooldown-days", DEFAULT_COOLDOWN_DAYS)),
         "hotfix_label": configured.get("hotfix-label", DEFAULT_HOTFIX_LABEL),
     }
@@ -164,25 +164,97 @@ def validate_requirements(project: dict[str, Any], lock: dict[str, Any]) -> list
         key = normalize_name(match.group(1)), match.group(2)
         if key not in locked:
             errors.append(f"build-system requirement is not present in uv.lock: {requirement}")
+
+    parser_requirements = project.get("dependency-groups", {}).get(config["parser_group"], [])
+    if len(parser_requirements) != 1:
+        errors.append(
+            f"dependency group {config['parser_group']!r} must contain exactly one YAML parser pin"
+        )
+    else:
+        parser_requirement = parser_requirements[0]
+        match = EXACT_REQUIREMENT.fullmatch(parser_requirement)
+        if not match or normalize_name(match.group(1)) != "pyyaml":
+            errors.append(f"dependency group {config['parser_group']!r} must exactly pin PyYAML")
+        elif ("pyyaml", match.group(2)) not in locked:
+            errors.append(
+                f"YAML parser requirement is not present in uv.lock: {parser_requirement}"
+            )
     return errors
+
+
+def yaml_uses_nodes(path: Path, text: str) -> tuple[list[tuple[int, str | None]], list[str]]:
+    """Return semantic ``uses`` mapping entries from the composed YAML node tree."""
+    import yaml
+
+    relative = path.relative_to(ROOT)
+    try:
+        document = yaml.compose(text, Loader=yaml.SafeLoader)
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        number = mark.line + 1 if mark is not None else 1
+        problem = getattr(exc, "problem", None) or str(exc).splitlines()[0]
+        return [], [f"{relative}:{number}: invalid workflow YAML: {problem}"]
+
+    if not isinstance(document, yaml.MappingNode):
+        return [], [f"{relative}:1: workflow YAML must contain one top-level mapping"]
+
+    entries: list[tuple[int, str | None]] = []
+    errors: list[str] = []
+    active: set[int] = set()
+
+    def walk(node: yaml.Node) -> None:
+        identity = id(node)
+        if identity in active:
+            errors.append(
+                f"{relative}:{node.start_mark.line + 1}: recursive YAML aliases are not admitted"
+            )
+            return
+        active.add(identity)
+        try:
+            if isinstance(node, yaml.MappingNode):
+                for key, value in node.value:
+                    if isinstance(key, yaml.ScalarNode) and key.value == "uses":
+                        reference = (
+                            value.value
+                            if isinstance(value, yaml.ScalarNode)
+                            and value.tag == "tag:yaml.org,2002:str"
+                            else None
+                        )
+                        entries.append((key.start_mark.line + 1, reference))
+                    walk(key)
+                    walk(value)
+            elif isinstance(node, yaml.SequenceNode):
+                for value in node.value:
+                    walk(value)
+        finally:
+            active.remove(identity)
+
+    walk(document)
+    return entries, errors
 
 
 def parse_actions(path: Path, text: str) -> tuple[dict[str, str], list[str]]:
     actions: dict[str, str] = {}
     occurrences: dict[str, int] = {}
-    errors: list[str] = []
-    for number, line in enumerate(text.splitlines(), 1):
-        stripped = line.lstrip()
-        if stripped.startswith("#") or "uses" not in line:
-            continue
+    entries, errors = yaml_uses_nodes(path, text)
+    lines = text.splitlines()
+    reported_syntax_lines: set[int] = set()
+    for number, semantic_reference in entries:
+        line = lines[number - 1]
         match = ACTION_PIN.match(line)
-        if not match:
-            if ANY_USES.search(line):
+        if not match or semantic_reference is None:
+            if number not in reported_syntax_lines:
                 errors.append(
-                    f"{path.relative_to(ROOT)}:{number}: non-canonical or unparseable uses syntax"
+                    f"{path.relative_to(ROOT)}:{number}: non-canonical uses mapping syntax"
                 )
+                reported_syntax_lines.add(number)
             continue
         reference = match.group(1)
+        if reference != semantic_reference:
+            errors.append(
+                f"{path.relative_to(ROOT)}:{number}: uses source disagrees with parsed YAML value"
+            )
+            continue
         if reference.startswith("./"):
             continue
         if "@" not in reference or not FULL_COMMIT.fullmatch(reference.rsplit("@", 1)[1]):
@@ -502,6 +574,11 @@ def main() -> int:
         action="store_true",
         help="Reject changed PyPI artifacts uploaded less than seven days ago",
     )
+    parser.add_argument(
+        "--preflight",
+        action="store_true",
+        help="Validate lock inputs without loading the admitted YAML parser",
+    )
     args = parser.parse_args()
 
     lock = load_toml(ROOT / "uv.lock")
@@ -522,11 +599,11 @@ def main() -> int:
         with Path(summary).open("a") as handle:
             handle.write("\n".join(report) + "\n")
 
-    errors = (
-        validate_lock(lock, project_package=config["project_package"])
-        + validate_requirements(project, lock)
-        + validate_actions()
+    errors = validate_lock(lock, project_package=config["project_package"]) + validate_requirements(
+        project, lock
     )
+    if not args.preflight:
+        errors += validate_actions()
     if args.enforce_cooldown:
         errors += validate_cooldown(
             lock,
@@ -538,14 +615,17 @@ def main() -> int:
             cooldown=timedelta(days=config["cooldown_days"]),
             hotfix_label=config["hotfix_label"],
             verify_canonical=True,
-            include_actions=True,
+            include_actions=not args.preflight,
         )
     if errors:
         print("\nDependency admission failed:", file=sys.stderr)
         for error in errors:
             print(f"- {error}", file=sys.stderr)
         return 1
-    print("\nDependency structure, artifact hashes, sources, and action pins are admitted.")
+    if args.preflight:
+        print("\nDependency lock inputs passed the standard-library preflight.")
+    else:
+        print("\nDependency structure, artifact hashes, sources, and action pins are admitted.")
     return 0
 
 

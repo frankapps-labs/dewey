@@ -13,6 +13,8 @@ PyYAML also parses every GitHub configuration file so malformed workflow syntax 
 """
 
 import re
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -273,11 +275,26 @@ def test_manual_hotfix_bypass_is_age_only_and_still_gated():
     assert "human approval" in section
 
 
-def test_dependency_checker_stays_standard_library_only():
+def test_dependency_preflight_stays_standard_library_only():
     text = DEPENDENCY_CHECKER.read_text()
     assert "import requests" not in text
     assert "import packaging" not in text
-    assert "import yaml" not in text
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-S",
+            str(DEPENDENCY_CHECKER),
+            "--preflight",
+            "--base-ref",
+            "origin/main",
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 # --- Workflow syntax -------------------------------------------------------

@@ -49,6 +49,9 @@ huey = [
 ]
 
 [dependency-groups]
+admission = [
+    "PyYAML==6.0.3",
+]
 build = [
     "setuptools==83.0.0",
     "wheel==0.47.0",
@@ -104,7 +107,7 @@ dev = [
     "Django>=5.2.16,<7",
     "psycopg2-binary>=2.9",
     "huey>=3,<4",
-    "pyyaml>=6.0",
+    "PyYAML==6.0.3",
 ]
 
 [project.urls]
@@ -119,6 +122,7 @@ where = ["src"]
 [tool.dependency-admission]
 project-package = "dewey"
 build-group = "build"
+parser-group = "admission"
 cooldown-days = 7
 hotfix-label = "dependency-hotfix"
 uv-version = "0.10.12"

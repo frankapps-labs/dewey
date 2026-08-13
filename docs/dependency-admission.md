@@ -38,8 +38,9 @@ explicit human review. Auto-merge is not an admission decision.
 
 ## What the automated gate proves
 
-`make dependency-check` runs a standard-library checker before dependency installation and
-then the vulnerability audits. It requires:
+`make dependency-check` first runs a standard-library preflight, installs the exact admitted
+PyYAML pin into a hash-locked parser environment, structurally composes workflow YAML, and
+then runs the vulnerability audits. It requires:
 
 - an up-to-date `uv.lock`;
 - registry packages sourced only from canonical PyPI;
@@ -47,8 +48,9 @@ then the vulnerability audits. It requires:
   PyPI release metadata before cooldown is evaluated;
 - no direct Git, URL, path, or mutable source requirements;
 - exact, locked build backends and hash-verified role-specific tool/test environments;
-- every external GitHub Action to use a full immutable commit SHA, with changed SHAs checked
-  against canonical GitHub commit metadata;
+- every external GitHub Action to use a full immutable commit SHA, with `uses` discovered
+  from the structural YAML node tree and changed SHAs checked against canonical GitHub commit
+  metadata;
 - blocking runtime `pip-audit` checks for the oldest and newest supported interpreter
   contexts;
 - a visible advisory audit for development tooling.
@@ -95,17 +97,19 @@ Do not lower or remove the repository-wide cooldown for a one-off exception.
 ## GitHub Actions updates
 
 Actions are executable CI dependencies. The admission gate compares workflow references with
-the base branch, rejects noncanonical `uses:` formatting, verifies every changed full SHA
-against canonical GitHub commit metadata, and applies the same seven-day age gate. A fresh
+the base branch, discovers decoded `uses` mapping keys through structural YAML parsing,
+rejects noncanonical `uses:` formatting, verifies every changed full SHA against canonical
+GitHub commit metadata, and applies the same seven-day age gate. A fresh
 manual Action update therefore requires the `dependency-hotfix` label, rationale, upstream
 evidence, and human approval; the exception bypasses age only. Major Action updates remain
 separate pull requests and require review of permissions, runtime changes, and release notes.
 
 ## Reusing the pattern
 
-The checker is standard-library-only and reads project-specific values from
-`[tool.dependency-admission]`. Other uv-managed Python projects can copy the checker and the
-hash-export helper, declare exact build/release/audit/compatibility groups, pin the uv CLI in
-workflows, and keep build-system requirements equal to the configured admitted build group.
+The checker keeps its preflight standard-library-only and reads project-specific values from
+`[tool.dependency-admission]`; its full pass uses the exact PyYAML pin admitted by that
+preflight. Other uv-managed Python projects can copy the checker and hash-export helper,
+declare exact admission/build/release/audit/compatibility groups, pin the uv CLI in workflows,
+and keep build-system requirements equal to the configured admitted build group.
 Release construction should run in a hash-verified, non-isolated tool environment; the OIDC
 publish job should only download the resulting artifact and publish it.
