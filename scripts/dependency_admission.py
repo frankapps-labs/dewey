@@ -23,7 +23,7 @@ PYPI_REGISTRY = "https://pypi.org/simple"
 PYPI_FILES = "https://files.pythonhosted.org/packages/"
 SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 ACTION_PIN = re.compile(r"^\s*(?:-\s*)?uses:\s+([^\s#]+)(?:\s+#.*)?$")
-ANY_USES = re.compile(r"(?:^|[\s{,\-])['\"]?uses['\"]?\s*:")
+ANY_USES = re.compile(r"\buses\b")
 FULL_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 EXACT_REQUIREMENT = re.compile(r"^([A-Za-z0-9_.-]+)==([^;\s]+)$")
 DEFAULT_COOLDOWN_DAYS = 7

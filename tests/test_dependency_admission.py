@@ -171,6 +171,7 @@ def test_complete_hotfix_evidence_bypasses_age_only(tmp_path):
         "      - uses : owner/action@" + "a" * 40,
         "      - 'uses': owner/action@" + "a" * 40,
         "      - {uses: owner/action@" + "a" * 40 + "}",
+        "      - ? uses\n        : owner/action@" + "a" * 40,
     ],
 )
 def test_noncanonical_action_yaml_fails_closed(line):
