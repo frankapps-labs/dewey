@@ -26,6 +26,12 @@ These are the checks in the repository, not a claim that they are sufficient:
   set. The locked runtime set resolved from all published extras is a blocking CI gate.
   Dev and tooling dependencies are audited advisory-only, since they reach
   contributors rather than users.
+- **Dependency admission** validates the locked graph before dependency installation:
+  canonical PyPI sources, SHA-256 artifact identities, immutable GitHub Action pins, a
+  review inventory, and a seven-day cooldown for routine Dependabot proposals. Known
+  security updates bypass cooldown; urgent maintainer hotfixes may bypass age only and must
+  retain every admission and verification gate. See
+  [the dependency-admission procedure](docs/dependency-admission.md).
 - **Dependabot** proposes GitHub Actions and Python dependency updates weekly.
 - **OpenSSF Scorecard** runs on `main` and publishes its result publicly. It uses no
   stored token: results are published with a short-lived Sigstore identity, which also

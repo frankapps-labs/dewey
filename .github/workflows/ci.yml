@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled, edited]
 
 permissions:
   contents: read
@@ -23,6 +24,7 @@ env:
 jobs:
   checks:
     name: Static checks
+    needs: audit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -39,16 +41,17 @@ jobs:
         run: uv sync --locked --all-extras --dev
 
       - name: Run linting
-        run: uv run ruff check src/ tests/
+        run: uv run ruff check src/ scripts/dependency_admission.py tests/
 
       - name: Run format check
-        run: uv run ruff format --check src/ tests/
+        run: uv run ruff format --check src/ scripts/dependency_admission.py tests/
 
       - name: Run typecheck
         run: uv run basedpyright
 
   test:
     name: Test (Python ${{ matrix.python-version }}, ${{ matrix.django-requirement }}, ${{ matrix.huey-requirement }})
+    needs: audit
     runs-on: ubuntu-latest
     env:
       # Compatibility requirements are installed after the locked sync. Prevent
@@ -161,6 +164,7 @@ jobs:
 
   wheel-smoke:
     name: Installed-wheel smoke
+    needs: audit
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -216,6 +220,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -224,6 +230,21 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+
+      # Runs before dependency sync in this job. The checker uses only Python's
+      # standard library, so it can reject unadmitted sources and missing hashes
+      # without importing newly selected dependency code.
+      - name: Validate dependency admission
+        env:
+          DEWEY_ADMISSION_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          DEWEY_ENFORCE_COOLDOWN: ${{ github.event_name == 'pull_request' }}
+        run: |
+          args=(--base-ref "$DEWEY_ADMISSION_BASE")
+          if [[ "$DEWEY_ENFORCE_COOLDOWN" == "true" ]]; then
+            args+=(--enforce-cooldown)
+          fi
+          python scripts/dependency_admission.py "${args[@]}"
+          uv lock --check
 
       - name: Export locked dependency sets
         run: |
@@ -236,11 +257,13 @@ jobs:
       # Python/Django lines, so audit both interpreter contexts.
       - name: Audit runtime dependencies
         run: |
-          uvx --python 3.11 pip-audit --no-deps --disable-pip -r requirements-runtime.txt
-          uvx --python 3.14 pip-audit --no-deps --disable-pip -r requirements-runtime.txt
+          uv run --isolated --locked --python 3.11 pip-audit \
+            --no-deps --disable-pip -r requirements-runtime.txt
+          uv run --isolated --locked --python 3.14 pip-audit \
+            --no-deps --disable-pip -r requirements-runtime.txt
 
       # Tooling is not shipped to users. Surface advisories without blocking an
       # unrelated product patch.
       - name: Audit development tooling
         continue-on-error: true
-        run: uvx pip-audit --no-deps --disable-pip -r requirements-dev-audit.txt
+        run: uv run --isolated --locked pip-audit --no-deps --disable-pip -r requirements-dev-audit.txt

@@ -32,8 +32,9 @@ touched packaging, imports, or anything in `src/dewey/django/migrations/`.
 
 ### Which CI jobs can fail your pull request
 
-Blocking: static checks, the four-lane compatibility matrix, the installed-wheel smoke,
-and the runtime portion of `Dependency audit`. One matrix lane uploads coverage.
+Blocking: static checks, the five-lane compatibility matrix, the installed-wheel smoke,
+dependency admission, and the runtime portion of `Dependency audit`. One matrix lane uploads
+coverage.
 
 Advisory: the development-tooling step within `Dependency audit`. A CVE in ruff or a
 pytest plugin ships to nobody.
@@ -45,8 +46,15 @@ unrelated pull request, the fix is to raise the floor in `pyproject.toml` and re
 to add an ignore.
 
 Dependabot opens one grouped pull request per week for GitHub Actions and for
-`pyproject.toml`/`uv.lock` minor and patch updates. Majors come separately, because a
-Django or SQLAlchemy major is a compatibility decision with matrix consequences.
+`pyproject.toml`/`uv.lock` minor and patch updates. Routine proposals wait through a
+seven-day cooldown; security updates do not. Majors come separately, because a Django or
+SQLAlchemy major is a compatibility decision with matrix consequences.
+
+Dependency updates follow [the dependency-admission procedure](docs/dependency-admission.md).
+Run `make dependency-check`, review new/transitive packages and provenance-sensitive changes,
+and never treat a green vulnerability scan as proof that a fresh artifact is trustworthy.
+A documented maintainer hotfix PR may bypass cooldown age, but not the admission, audit,
+compatibility, wheel, or human-approval gates.
 
 ## What we look for
 

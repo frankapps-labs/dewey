@@ -22,6 +22,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 CI = WORKFLOWS / "ci.yml"
 DEPENDABOT = REPO_ROOT / ".github" / "dependabot.yml"
+DEPENDENCY_POLICY = REPO_ROOT / "docs" / "dependency-admission.md"
+DEPENDENCY_CHECKER = REPO_ROOT / "scripts" / "dependency_admission.py"
 MAKEFILE = REPO_ROOT / "Makefile"
 
 
@@ -89,21 +91,37 @@ def test_gating_jobs_are_not_advisory():
         assert "continue-on-error" not in header, f"{job} must remain a gate"
 
 
+def test_dependency_installing_jobs_wait_for_admission():
+    for job in ("checks", "test", "wheel-smoke"):
+        header = "\n".join(job_block(CI, job).splitlines()[:8])
+        assert "needs: audit" in header, f"{job} must not install before dependency admission"
+
+
+def test_hotfix_label_or_body_edit_retriggers_admission():
+    trigger = CI.read_text().split("permissions:", 1)[0]
+    for event in ("labeled", "unlabeled", "edited", "synchronize"):
+        assert event in trigger
+
+
 # --- Dependency audit split ------------------------------------------------
 
 
 def test_runtime_audit_scope_comes_from_its_own_export():
     """Runtime scope must be a separate export, not a filtered combined report."""
     block = job_block(CI, "audit")
+    assert "scripts/dependency_admission.py" in block
+    assert "uv lock --check" in block
     assert "--no-dev" in block and "--all-extras" in block
-    assert "uvx --python 3.11 pip-audit" in block
-    assert "uvx --python 3.14 pip-audit" in block
+    assert "uv run --isolated --locked --python 3.11 pip-audit" in block
+    assert "uv run --isolated --locked --python 3.14 pip-audit" in block
+    assert "uvx" not in block, "the vulnerability scanner must come from uv.lock"
 
 
 def test_dev_audit_stays_advisory_and_dev_scoped():
     block = job_block(CI, "audit")
     assert "--only-dev" in block
     assert re.search(r"- name: Audit development tooling\n\s+continue-on-error: true", block)
+    assert "uv run --isolated --locked pip-audit" in block
 
 
 # --- Security workflows ----------------------------------------------------
@@ -182,6 +200,30 @@ def test_dependabot_groups_only_minor_and_patch():
     assert '"major"' not in text
     for update_type in ('"minor"', '"patch"'):
         assert text.count(update_type) == 2
+
+
+def test_dependabot_routine_updates_have_a_seven_day_cooldown():
+    text = DEPENDABOT.read_text()
+    assert text.count("cooldown:") == 2
+    assert text.count("default-days: 7") == 2
+    assert "ignore:" not in text, "security updates must not be globally ignored"
+    assert "insecure-external-code-execution" not in text
+
+
+def test_manual_hotfix_bypass_is_age_only_and_still_gated():
+    text = DEPENDENCY_POLICY.read_text()
+    section = text[text.index("## Urgent hotfix bypass") :]
+    assert "exception to **age only**" in section
+    assert "uv lock --upgrade-package PACKAGE" in section
+    assert "make dependency-check" in section
+    assert "human approval" in section
+
+
+def test_dependency_checker_stays_standard_library_only():
+    text = DEPENDENCY_CHECKER.read_text()
+    assert "import requests" not in text
+    assert "import packaging" not in text
+    assert "import yaml" not in text
 
 
 # --- Workflow syntax -------------------------------------------------------

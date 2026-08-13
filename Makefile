@@ -1,4 +1,4 @@
-.PHONY: help install test test-cov test-integration lint typecheck format format-check up down wheel-smoke optional-import-matrix clean build publish-test publish release ci setup _check-clean _check-branch _check-release-head
+.PHONY: help install test test-cov test-integration dependency-check lint typecheck format format-check up down wheel-smoke optional-import-matrix clean build publish-test publish release ci setup _check-clean _check-branch _check-release-head
 
 PACKAGE := src/dewey
 
@@ -22,6 +22,7 @@ help:
 	@echo "  make test-integration  Run the suite against the compose containers"
 	@echo "  make wheel-smoke   Build a wheel and exercise it in a clean venv"
 	@echo "  make optional-import-matrix  Prove core/extras imports in isolated venvs"
+	@echo "  make dependency-check  Validate and audit admitted dependencies"
 	@echo ""
 	@echo "Building & Publishing:"
 	@echo "  make clean         Remove build artifacts"
@@ -65,18 +66,34 @@ optional-import-matrix: build
 test-cov:
 	uv run pytest --cov=dewey --cov-report=term-missing --cov-report=html
 
+dependency-check:
+	python3 scripts/dependency_admission.py
+	uv lock --check
+	@set -e; tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	uv export --locked --format requirements-txt --no-hashes --no-emit-project \
+		--no-dev --all-extras > "$$tmp/requirements-runtime.txt"; \
+	uv export --locked --format requirements-txt --no-hashes --no-emit-project \
+		--only-dev > "$$tmp/requirements-dev.txt"; \
+	uv run --isolated --locked --python 3.11 pip-audit \
+		--no-deps --disable-pip -r "$$tmp/requirements-runtime.txt"; \
+	uv run --isolated --locked --python 3.14 pip-audit \
+		--no-deps --disable-pip -r "$$tmp/requirements-runtime.txt"; \
+	uv run --isolated --locked pip-audit \
+		--no-deps --disable-pip -r "$$tmp/requirements-dev.txt" || \
+		echo "Development-tool advisories are visible but non-blocking."
+
 lint:
-	uv run ruff check $(PACKAGE) tests
+	uv run ruff check $(PACKAGE) scripts/dependency_admission.py tests
 
 typecheck:
 	uv run basedpyright
 
 format:
-	uv run ruff check --fix $(PACKAGE) tests
-	uv run ruff format $(PACKAGE) tests
+	uv run ruff check --fix $(PACKAGE) scripts/dependency_admission.py tests
+	uv run ruff format $(PACKAGE) scripts/dependency_admission.py tests
 
 format-check:
-	uv run ruff format --check $(PACKAGE) tests
+	uv run ruff format --check $(PACKAGE) scripts/dependency_admission.py tests
 
 clean:
 	rm -rf build/ dist/ *.egg-info htmlcov/ .pytest_cache/ .pyright/ .coverage
