@@ -3,6 +3,15 @@
 This changelog records the public Frankapps Dewey release lineage. Earlier versions under
 the `dewey` package name predate this lineage and are intentionally not represented here.
 
+## [0.5.2]
+
+### Fixed
+
+- The `django` extra now permits Django 5.2 on Python 3.12 and newer by declaring
+  `Django>=5.2.16,<7` without a Python-version split. Applications that intentionally
+  remain on the Django 5.2 LTS line can install Dewey alongside Huey 3, while unconstrained
+  Python 3.12+ environments may still resolve Django 6.
+
 ## [0.5.1] - 2026-08-12
 
 ### Fixed
@@ -125,6 +134,7 @@ PyPI already contains an unrelated historical 0.3.0 release.
 - Installed-wheel PostgreSQL/Redis/Huey smoke coverage plus multi-process claim tests for
   the packaged Django and SQLAlchemy paths.
 
+[0.5.2]: https://github.com/frankapps-labs/dewey/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/frankapps-labs/dewey/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/frankapps-labs/dewey/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/frankapps-labs/dewey/releases/tag/v0.4.0

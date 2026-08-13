@@ -58,10 +58,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # One intentional lane per supported Python version. Django 5.2 is
-          # the floor on 3.11; supported newer Pythons exercise current Django.
+          # One intentional lane per supported Python version, plus a Python 3.12
+          # Django 5.2 lane guarding the oldest-Django/newer-Python resolver seam.
           # Every lane upgrades within Huey 3.x, so CI tracks its latest release.
           - python-version: "3.11"
+            django-requirement: "Django~=5.2.0"
+            huey-requirement: "huey>=3,<4"
+            upload-coverage: false
+          - python-version: "3.12"
             django-requirement: "Django~=5.2.0"
             huey-requirement: "huey>=3,<4"
             upload-coverage: false

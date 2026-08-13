@@ -384,7 +384,7 @@ wheels = [
 
 [[package]]
 name = "dewey"
-version = "0.5.1"
+version = "0.5.2"
 source = { editable = "." }
 
 [package.optional-dependencies]
@@ -425,8 +425,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "asyncpg", marker = "extra == 'async'", specifier = ">=0.30.0" },
-    { name = "django", marker = "python_full_version >= '3.12' and extra == 'django'", specifier = ">=6.0.7,<7" },
-    { name = "django", marker = "python_full_version < '3.12' and extra == 'django'", specifier = ">=5.2.16,<6" },
+    { name = "django", marker = "extra == 'django'", specifier = ">=5.2.16,<7" },
     { name = "huey", marker = "extra == 'huey'", specifier = ">=3,<4" },
     { name = "sqlalchemy", marker = "extra == 'sqlalchemy'", specifier = ">=2.0" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'async'", specifier = ">=2.0" },
@@ -438,8 +437,7 @@ dev = [
     { name = "aiosqlite", specifier = ">=0.21.0" },
     { name = "asyncpg", specifier = ">=0.30.0" },
     { name = "basedpyright", specifier = ">=1.31.0" },
-    { name = "django", marker = "python_full_version < '3.12'", specifier = ">=5.2.16,<6" },
-    { name = "django", marker = "python_full_version >= '3.12'", specifier = ">=6.0.7,<7" },
+    { name = "django", specifier = ">=5.2.16,<7" },
     { name = "huey", specifier = ">=3,<4" },
     { name = "psycopg2-binary", specifier = ">=2.9" },
     { name = "pytest", specifier = ">=7.0" },
