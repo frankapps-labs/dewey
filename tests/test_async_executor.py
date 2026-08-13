@@ -1,12 +1,18 @@
 """Tests for async executor — create_task_async + process_task_async."""
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import func, select
 
+import dewey.sqlalchemy.async_executor as executor_module
 from dewey.core.states import TaskStatus
-from dewey.sqlalchemy.async_executor import create_task_async, process_task_async
+from dewey.sqlalchemy.async_executor import (
+    create_or_get_task_async,
+    create_task_async,
+    process_task_async,
+)
 from dewey.sqlalchemy.models import TaskEntryModel
 
 # --- create_task_async ---
@@ -62,6 +68,84 @@ async def test_create_task_with_metadata(async_session):
         metadata={"customer_id": "cust_123"},
     )
     assert task.task_metadata == {"customer_id": "cust_123"}
+
+
+# --- scheduled_for validation ---
+# Naive scheduled_for fails fast — exact error, no row written, no NOTIFY sent.
+
+_AWARE_OR_NONE_SCHEDULES = pytest.mark.parametrize(
+    "scheduled_for",
+    [
+        None,
+        datetime(2026, 12, 1, tzinfo=UTC),
+        datetime(2026, 12, 1, tzinfo=timezone(timedelta(hours=5, minutes=30))),
+    ],
+    ids=["none", "utc", "offset"],
+)
+
+
+def _spy_notifications(monkeypatch):
+    notifications = []
+
+    async def spy(*args, **kwargs):
+        notifications.append((args, kwargs))
+
+    monkeypatch.setattr(executor_module, "notify_work_available_async", spy)
+    return notifications
+
+
+async def _count_tasks(session):
+    return await session.scalar(select(func.count()).select_from(TaskEntryModel))
+
+
+@pytest.mark.asyncio
+async def test_create_task_rejects_naive_scheduled_for(async_session, monkeypatch):
+    notifications = _spy_notifications(monkeypatch)
+    with pytest.raises(ValueError) as excinfo:
+        await create_task_async(async_session, task_type="scan", scheduled_for=datetime.now())
+    assert str(excinfo.value) == "scheduled_for must be a timezone-aware datetime"
+    assert notifications == []
+    assert await _count_tasks(async_session) == 0
+
+
+@pytest.mark.asyncio
+async def test_create_or_get_task_rejects_naive_scheduled_for(async_session, monkeypatch):
+    notifications = _spy_notifications(monkeypatch)
+    with pytest.raises(ValueError) as excinfo:
+        await create_or_get_task_async(
+            async_session,
+            task_type="scan",
+            idempotency_key="scan-naive",
+            scheduled_for=datetime.now(),
+        )
+    assert str(excinfo.value) == "scheduled_for must be a timezone-aware datetime"
+    assert notifications == []
+    assert await _count_tasks(async_session) == 0
+
+
+@pytest.mark.asyncio
+@_AWARE_OR_NONE_SCHEDULES
+async def test_create_task_accepts_aware_and_none_scheduled_for(async_session, scheduled_for):
+    task = await create_task_async(async_session, task_type="scan", scheduled_for=scheduled_for)
+    await async_session.refresh(task)
+    assert task.scheduled_for == scheduled_for
+    assert await _count_tasks(async_session) == 1
+
+
+@pytest.mark.asyncio
+@_AWARE_OR_NONE_SCHEDULES
+async def test_create_or_get_task_accepts_aware_and_none_scheduled_for(
+    async_session, scheduled_for
+):
+    task = await create_or_get_task_async(
+        async_session,
+        task_type="scan",
+        idempotency_key=f"scan-aware-{scheduled_for!s}",
+        scheduled_for=scheduled_for,
+    )
+    await async_session.refresh(task)
+    assert task.scheduled_for == scheduled_for
+    assert await _count_tasks(async_session) == 1
 
 
 # --- process_task_async ---

@@ -1,4 +1,4 @@
-.PHONY: help install test test-cov test-integration lint typecheck format format-check up down wheel-smoke optional-import-matrix clean build publish-test publish release ci setup
+.PHONY: help install test test-cov test-integration lint typecheck format format-check up down wheel-smoke optional-import-matrix clean build publish-test publish release ci setup _check-clean _check-branch _check-release-head
 
 PACKAGE := src/dewey
 
@@ -95,14 +95,22 @@ publish: build
 	@read -p "Press Enter to continue..."
 	uv publish
 
-release: _check-clean _check-branch test build
+release: _check-clean _check-release-head test build
 	@VERSION=$$(grep 'version = ' pyproject.toml | head -1 | cut -d'"' -f2) && \
-	echo "Ready to release v$$VERSION" && \
+	TAG="v$$VERSION" && \
+	grep -Eq "^## \[$$VERSION\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$$" CHANGELOG.md || \
+		{ echo "CHANGELOG.md must contain a dated $$VERSION heading."; exit 1; }; \
+	if git rev-parse -q --verify "refs/tags/$$TAG" >/dev/null || \
+		git ls-remote --exit-code --tags origin "refs/tags/$$TAG" >/dev/null 2>&1; then \
+		echo "Tag $$TAG already exists locally or on origin."; \
+		exit 1; \
+	fi; \
+	echo "Ready to tag $$(git rev-parse HEAD) as $$TAG" && \
 	read -p "Continue? [y/N] " confirm && \
 	if [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ]; then \
-		git tag "v$$VERSION" && \
-		git push && git push --tags && \
-		echo "Released v$$VERSION!"; \
+		git tag -a "$$TAG" -m "Dewey $$VERSION" && \
+		git push origin "refs/tags/$$TAG" && \
+		echo "Released $$TAG!"; \
 	else \
 		echo "Aborted."; \
 	fi
@@ -118,6 +126,15 @@ _check-branch:
 	@BRANCH=$$(git rev-parse --abbrev-ref HEAD) && \
 	if [ "$$BRANCH" != "main" ]; then \
 		echo "Not on main branch (currently on $$BRANCH)"; \
+		exit 1; \
+	fi
+
+_check-release-head: _check-branch
+	@git fetch --quiet origin main --tags && \
+	LOCAL=$$(git rev-parse HEAD) && \
+	REMOTE=$$(git rev-parse origin/main) && \
+	if [ "$$LOCAL" != "$$REMOTE" ]; then \
+		echo "Local main ($$LOCAL) is not exact origin/main ($$REMOTE)."; \
 		exit 1; \
 	fi
 
