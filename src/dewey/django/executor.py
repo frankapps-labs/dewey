@@ -18,6 +18,7 @@ from dewey.core.logging import (
 )
 from dewey.core.states import TaskStatus
 from dewey.core.types import TaskEntry as TaskEntryDC
+from dewey.core.validation import require_timezone_aware
 from dewey.django.listen import notify_work_available
 from dewey.django.models import TaskEntry, resolve_db_alias
 from dewey.policy import resolve_policy
@@ -59,6 +60,7 @@ def create_task(
 
     Returns a TaskEntry dataclass (with .id).
     """
+    require_timezone_aware(scheduled_for, "scheduled_for")
     if expires_at is not None and expires_at.utcoffset() is None:
         raise ValueError("expires_at must be a timezone-aware datetime")
     policy = resolve_policy(task_type)
@@ -106,8 +108,7 @@ def create_or_get_task(
 
     if not idempotency_key:
         raise ValueError("create_or_get_task requires a non-empty idempotency_key")
-    if scheduled_for is not None and scheduled_for.utcoffset() is None:
-        raise ValueError("scheduled_for must be a timezone-aware datetime")
+    require_timezone_aware(scheduled_for, "scheduled_for")
     if expires_at is not None and expires_at.utcoffset() is None:
         raise ValueError("expires_at must be a timezone-aware datetime")
     policy = resolve_policy(task_type)

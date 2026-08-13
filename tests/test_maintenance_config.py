@@ -22,6 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 CI = WORKFLOWS / "ci.yml"
 DEPENDABOT = REPO_ROOT / ".github" / "dependabot.yml"
+MAKEFILE = REPO_ROOT / "Makefile"
 
 
 @pytest.fixture(autouse=True)
@@ -65,9 +66,21 @@ def test_supported_python_versions_are_classified():
 def test_gating_matrix_still_covers_every_supported_version():
     block = job_block(CI, "test")
     versions = re.findall(r'^\s+- python-version: "([^"]+)"$', block, re.MULTILINE)
-    assert versions == ["3.11", "3.12", "3.13", "3.14"], (
+    assert versions == ["3.11", "3.12", "3.12", "3.13", "3.14"], (
         "the blocking matrix changed; update the classifiers and this guard together"
     )
+
+
+def test_django_5_2_is_supported_on_python_3_12():
+    project = pyproject()["project"]
+    assert project["optional-dependencies"]["django"] == ["Django>=5.2.16,<7"]
+    assert project["optional-dependencies"]["huey"] == ["huey>=3,<4"]
+
+    block = job_block(CI, "test")
+    assert re.search(
+        r'- python-version: "3\.12"\n\s+django-requirement: "Django~=5\.2\.0"',
+        block,
+    ), "the Python 3.12 + Django 5.2 compatibility lane is required"
 
 
 def test_gating_jobs_are_not_advisory():
@@ -136,6 +149,20 @@ def test_trusted_publishing_is_preserved():
     assert "pypa/gh-action-pypi-publish@" in text
     assert "password" not in text
     assert "PYPI_API_TOKEN" not in text
+
+
+def test_release_target_tags_only_exact_origin_main():
+    text = MAKEFILE.read_text()
+    release = text[text.index("release:") : text.index("_check-clean:")]
+    release_head = text[text.index("_check-release-head:") : text.index("ci:")]
+
+    assert "_check-release-head" in release
+    assert "git fetch --quiet origin main --tags" in release_head
+    assert "git rev-parse origin/main" in release_head
+    assert 'git tag -a "$$TAG"' in release
+    assert 'git push origin "refs/tags/$$TAG"' in release
+    assert "git push --tags" not in release
+    assert "git push &&" not in release
 
 
 # --- Dependabot ------------------------------------------------------------

@@ -37,13 +37,21 @@ echo "==> Installing the wheel with every advertised extra"
 cp "$REPO_ROOT/scripts/wheel_smoke.py" "$WORK_DIR/wheel_smoke.py"
 cd "$WORK_DIR"
 
-echo "==> Verifying the import path really is the installed package"
-"$VENV_PY" - <<'PY'
+echo "==> Verifying the import path and version are from the installed package"
+EXPECTED_VERSION="$(basename "$WHEEL" | sed -E 's/^dewey-([^-]+)-.*/\1/')"
+DEWEY_EXPECTED_VERSION="$EXPECTED_VERSION" "$VENV_PY" - <<'PY'
+import os
 import pathlib
+from importlib.metadata import metadata, version
+
 import dewey
 
+expected = os.environ["DEWEY_EXPECTED_VERSION"]
 location = pathlib.Path(dewey.__file__).resolve()
 assert "site-packages" in location.parts, f"imported the source tree, not the wheel: {location}"
+assert metadata("dewey")["Version"] == expected
+assert version("dewey") == expected
+assert dewey.__version__ == expected
 print(f"    dewey {dewey.__version__} from {location.parent}")
 PY
 
