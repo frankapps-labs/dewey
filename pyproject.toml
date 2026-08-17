@@ -45,7 +45,7 @@ django = [
     "Django>=5.2.16,<7",
 ]
 huey = [
-    "huey>=3,<4",
+    "huey==3.3.4",
 ]
 
 [dependency-groups]
@@ -66,7 +66,7 @@ audit = [
     # Cooled transitive ceilings keep the scanner graph outside the seven-day
     # window as of 2026-08-13.
     "cyclonedx-python-lib==11.11.0",
-    "platformdirs==4.11.0",
+    "platformdirs==4.11.1",
 ]
 wheel-smoke = [
     "psycopg2-binary==2.9.12",
@@ -74,23 +74,23 @@ wheel-smoke = [
 ]
 compat-py311-django52 = [
     "Django==5.2.16; python_version == '3.11'",
-    "huey==3.0.0; python_version == '3.11'",
+    "huey==3.3.4; python_version == '3.11'",
 ]
 compat-py312-django52 = [
     "Django==5.2.16; python_version == '3.12'",
-    "huey==3.0.0; python_version == '3.12'",
+    "huey==3.3.4; python_version == '3.12'",
 ]
 compat-py312-django60 = [
     "Django==6.0.7; python_version == '3.12'",
-    "huey==3.0.0; python_version == '3.12'",
+    "huey==3.3.4; python_version == '3.12'",
 ]
 compat-py313-django60 = [
     "Django==6.0.7; python_version == '3.13'",
-    "huey==3.0.0; python_version == '3.13'",
+    "huey==3.3.4; python_version == '3.13'",
 ]
 compat-py314-django60 = [
     "Django==6.0.7; python_version == '3.14'",
-    "huey==3.0.0; python_version == '3.14'",
+    "huey==3.3.4; python_version == '3.14'",
 ]
 dev = [
     "pytest>=7.0",
@@ -106,7 +106,7 @@ dev = [
     # Django 6 on Python 3.12+ when the consuming application does not constrain it.
     "Django>=5.2.16,<7",
     "psycopg2-binary>=2.9",
-    "huey>=3,<4",
+    "huey<4,>=3",
     "PyYAML==6.0.3",
 ]
 
