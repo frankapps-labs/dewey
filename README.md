@@ -217,6 +217,22 @@ delivery is **not** part of it — an earlier parallel ledger was removed before
 rather than shipped half-committed. Future notification tooling can build channel handlers
 on ordinary Dewey tasks without adding another execution engine.
 
+## Releases
+
+Dewey ships small, often: **the default is a micro-release on every behavior-changing
+merge.** Each such merge bumps the version (SemVer — patch = fix, minor = feature, major =
+breaking), adds a dated `## [x.y.z] - date` entry to
+[`CHANGELOG.md`](https://github.com/frankapps-labs/dewey/blob/main/CHANGELOG.md), and tags
+`v0.x.y`. CI/chore-only changes (workflows, dependency admission, builds) do **not** get a
+version-tagged release — they fold into the next real one.
+
+Two things to know when reading the log:
+
+- A **`## [Unreleased]` section is the deliberate exception, not the norm**, used only when
+  several changes must land together as one packet.
+- **A changelog entry is not a release.** An entry may sit on `main` untagged until the next
+  release is cut; the changelog records the release lineage, it does not itself ship code.
+
 ## Development
 
 ```bash
