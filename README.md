@@ -224,7 +224,9 @@ merge.** Each such merge bumps the version (SemVer — patch = fix, minor = feat
 breaking), adds a dated `## [x.y.z] - date` entry to
 [`CHANGELOG.md`](https://github.com/frankapps-labs/dewey/blob/main/CHANGELOG.md), and tags
 `v0.x.y`. CI/chore-only changes (workflows, dependency admission, builds) do **not** get a
-version-tagged release — they fold into the next real one.
+version-tagged release — they fold into the next real one. A **user-facing security or
+dependency-floor change is a release**, not an `[Unreleased]` entry — it bumps the version
+exactly like a feature.
 
 Two things to know when reading the log:
 

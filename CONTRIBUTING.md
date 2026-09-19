@@ -79,7 +79,8 @@ Dewey ships small, often: the default is a **micro-release on every behavior-cha
 merge**. A merged PR that changes user-facing behaviour gets a SemVer version bump
 (patch = fix, minor = feature, major = breaking), a dated `## [x.y.z] - date` entry in
 `CHANGELOG.md`, and a `v0.x.y` tag. CI/chore-only changes do not get a tagged release —
-they fold into the next real one.
+they fold into the next real one. A **user-facing security or dependency-floor change is a
+release**, not an `[Unreleased]` entry — version-bump and tag it like any feature.
 
 Two things to expect:
 
