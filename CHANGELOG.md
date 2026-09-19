@@ -3,7 +3,7 @@
 This changelog records the public Frankapps Dewey release lineage. Earlier versions under
 the `dewey` package name predate this lineage and are intentionally not represented here.
 
-## [Unreleased]
+## [0.5.3] - 2026-09-19
 
 ### Security
 
