@@ -3,6 +3,14 @@
 This changelog records the public Frankapps Dewey release lineage. Earlier versions under
 the `dewey` package name predate this lineage and are intentionally not represented here.
 
+## [Unreleased]
+
+### Security
+
+- Bump the supported dependency floors to CVE-fixed versions: Django 5.2.17 (and 6.0.8 on the
+  Python 3.12+ seam) and sqlparse 0.6.0, addressing PYSEC-2026-3717 (Django) and
+  PYSEC-2026-3696/3697/3698/3699/3923 (sqlparse).
+
 ## [0.5.2] - 2026-08-12
 
 ### Fixed
