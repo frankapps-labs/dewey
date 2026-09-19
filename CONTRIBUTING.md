@@ -73,6 +73,22 @@ either put it there or add a parity test in `tests/test_executor_policy_parity.p
 **Docs that match.** Public behaviour is documented in `docs/`. A change to what Dewey
 guarantees is a change to `docs/concepts.md`.
 
+## Releases & changelog
+
+Dewey ships small, often: the default is a **micro-release on every behavior-changing
+merge**. A merged PR that changes user-facing behaviour gets a SemVer version bump
+(patch = fix, minor = feature, major = breaking), a dated `## [x.y.z] - date` entry in
+`CHANGELOG.md`, and a `v0.x.y` tag. CI/chore-only changes do not get a tagged release —
+they fold into the next real one. A **user-facing security or dependency-floor change is a
+release**, not an `[Unreleased]` entry — version-bump and tag it like any feature.
+
+Two things to expect:
+
+- A `## [Unreleased]` block is the **deliberate exception, not the norm**, kept only when
+  several changes must land together as one packet.
+- A changelog entry is **not itself a release**. Your merged work may sit on `main` untagged
+  until the next release is cut; the changelog records the lineage, it does not ship code.
+
 ## Things likely to be declined
 
 - **A scheduler.** Cron, Celery beat, Huey periodic and Kubernetes CronJobs already exist;
