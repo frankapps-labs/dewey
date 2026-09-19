@@ -59,7 +59,7 @@ build = [
 release = [
     "setuptools==83.0.0",
     "wheel==0.47.0",
-    "twine==6.2.0",
+    "twine==7.0.0",
 ]
 audit = [
     "pip-audit==2.10.1",
