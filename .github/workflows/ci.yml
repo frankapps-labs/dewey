@@ -64,27 +64,27 @@ jobs:
           # Every lane upgrades within Huey 3.x, so CI tracks its latest release.
           - python-version: "3.11"
             compatibility-group: "compat-py311-django52"
-            expected-django: "5.2.16"
+            expected-django: "5.2.17"
             expected-huey: "3.0.0"
             upload-coverage: false
           - python-version: "3.12"
             compatibility-group: "compat-py312-django52"
-            expected-django: "5.2.16"
+            expected-django: "5.2.17"
             expected-huey: "3.0.0"
             upload-coverage: false
           - python-version: "3.12"
             compatibility-group: "compat-py312-django60"
-            expected-django: "6.0.7"
+            expected-django: "6.0.8"
             expected-huey: "3.0.0"
             upload-coverage: true
           - python-version: "3.13"
             compatibility-group: "compat-py313-django60"
-            expected-django: "6.0.7"
+            expected-django: "6.0.8"
             expected-huey: "3.0.0"
             upload-coverage: false
           - python-version: "3.14"
             compatibility-group: "compat-py314-django60"
-            expected-django: "6.0.7"
+            expected-django: "6.0.8"
             expected-huey: "3.0.0"
             upload-coverage: false
 
