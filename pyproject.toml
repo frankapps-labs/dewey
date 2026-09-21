@@ -1,7 +1,7 @@
 [build-system]
 # Exact, cooled build backends. Keep these equal to dependency-groups.build;
 # release and CI builds run without isolation from that admitted lock.
-requires = ["setuptools==83.0.0", "wheel==0.47.0"]
+requires = ["setuptools==83.0.0", "wheel==0.48.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -45,7 +45,7 @@ django = [
     "Django>=5.2.17,<7",
 ]
 huey = [
-    "huey>=3,<4",
+    "huey==3.4.0",
 ]
 
 [dependency-groups]
@@ -54,43 +54,43 @@ admission = [
 ]
 build = [
     "setuptools==83.0.0",
-    "wheel==0.47.0",
+    "wheel==0.48.0",
 ]
 release = [
     "setuptools==83.0.0",
-    "wheel==0.47.0",
+    "wheel==0.48.0",
     "twine==7.0.0",
 ]
 audit = [
     "pip-audit==2.10.1",
     # Cooled transitive ceilings keep the scanner graph outside the seven-day
     # window as of 2026-08-13.
-    "cyclonedx-python-lib==11.11.0",
-    "platformdirs==4.11.0",
+    "cyclonedx-python-lib==11.12.0",
+    "platformdirs==4.11.8",
 ]
 wheel-smoke = [
-    "psycopg2-binary==2.9.12",
+    "psycopg2-binary==2.9.13",
     "redis==8.1.0",
 ]
 compat-py311-django52 = [
     "Django==5.2.17; python_version == '3.11'",
-    "huey==3.0.0; python_version == '3.11'",
+    "huey==3.4.0; python_version == '3.11'",
 ]
 compat-py312-django52 = [
     "Django==5.2.17; python_version == '3.12'",
-    "huey==3.0.0; python_version == '3.12'",
+    "huey==3.4.0; python_version == '3.12'",
 ]
 compat-py312-django60 = [
     "Django==6.0.8; python_version == '3.12'",
-    "huey==3.0.0; python_version == '3.12'",
+    "huey==3.4.0; python_version == '3.12'",
 ]
 compat-py313-django60 = [
     "Django==6.0.8; python_version == '3.13'",
-    "huey==3.0.0; python_version == '3.13'",
+    "huey==3.4.0; python_version == '3.13'",
 ]
 compat-py314-django60 = [
     "Django==6.0.8; python_version == '3.14'",
-    "huey==3.0.0; python_version == '3.14'",
+    "huey==3.4.0; python_version == '3.14'",
 ]
 dev = [
     "pytest>=7.0",
@@ -106,7 +106,7 @@ dev = [
     # Django 6 on Python 3.12+ when the consuming application does not constrain it.
     "Django>=5.2.17,<7",
     "psycopg2-binary>=2.9",
-    "huey>=3,<4",
+    "huey<4,>=3",
     "PyYAML==6.0.3",
 ]
 
