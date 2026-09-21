@@ -1,7 +1,7 @@
 [build-system]
 # Exact, cooled build backends. Keep these equal to dependency-groups.build;
 # release and CI builds run without isolation from that admitted lock.
-requires = ["setuptools==83.0.0", "wheel==0.47.0"]
+requires = ["setuptools==84.0.0", "wheel==0.47.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -53,11 +53,11 @@ admission = [
     "PyYAML==6.0.3",
 ]
 build = [
-    "setuptools==83.0.0",
+    "setuptools==84.0.0",
     "wheel==0.47.0",
 ]
 release = [
-    "setuptools==83.0.0",
+    "setuptools==84.0.0",
     "wheel==0.47.0",
     "twine==7.0.0",
 ]
