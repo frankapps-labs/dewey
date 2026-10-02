@@ -167,11 +167,18 @@ class TestTaskEntryModelParity:
         assert dc.initial_scheduled_for == created
         assert dc.expired_at == deadline + timedelta(seconds=1)
 
-    def test_to_dataclass_and_model_share_one_field_set(self):
-        """A field added to either side without the other fails here."""
+    def test_to_dataclass_and_model_share_the_public_field_set(self):
+        """Execution ownership is the sole model-only field, not a task result API."""
         dataclass_fields = {f.name for f in dataclasses.fields(TaskEntryDC)}
         model_fields = {f.name for f in TaskEntry._meta.concrete_fields}
-        assert dataclass_fields == model_fields
+        assert dataclass_fields == model_fields - {"execution_token"}
+        assert "execution_token" not in dataclass_fields
+
+    def test_execution_token_is_nullable_internal_identity(self):
+        field = TaskEntry._meta.get_field("execution_token")
+        assert field.null is True
+        assert field.editable is False
+        assert field.max_length == 36
 
 
 class TestDispatcherHeartbeatModelParity:
@@ -240,7 +247,8 @@ class TestMigration0002Reversibility:
                 assert cursor.fetchone() == (TaskStatus.DEAD.value,)
         finally:
             executor.loader.build_graph()
-            executor.migrate([("dewey", MIGRATION_0002)])
+            # Restore current model compatibility, not only this historical revision.
+            executor.migrate(executor.loader.graph.leaf_nodes("dewey"))
 
         columns = task_columns()
         assert {"expires_at", "initial_scheduled_for", "expired_at"} <= columns

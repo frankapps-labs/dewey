@@ -67,7 +67,9 @@ shows one).
 python manage.py migrate
 ```
 
-Migrations ship in the package, so that is all the schema setup there is.
+Migrations ship in the package, so that is all the schema setup there is. For the
+unreleased execution-ownership migration, follow the
+[coordinated upgrade contract](execution-ownership.md) before enabling upgraded writers.
 
 ### 2. Declare a task
 
@@ -263,6 +265,10 @@ CREATE INDEX IF NOT EXISTS ix_dewey_heartbeats_last_seen
 CREATE INDEX IF NOT EXISTS ix_dewey_heartbeats_backend_database
   ON dewey_dispatcher_heartbeats (backend, database);
 ```
+
+The unreleased execution-ownership column requires an additional additive migration
+on an existing table. See [execution ownership](execution-ownership.md) for the SQL
+and stop/drain upgrade contract; `create_all()` alone cannot enable it safely.
 
 ### 2. Declare a task and wire the transport
 

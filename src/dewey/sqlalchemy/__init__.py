@@ -60,6 +60,7 @@ from dewey.sqlalchemy.queries import (
     purge_completed,
     retry_task,
 )
+from dewey.sqlalchemy.readiness import ReadinessError, check_readiness, check_readiness_async
 from dewey.sqlalchemy.sweep import (
     sweep,
     sweep_dispatching,
@@ -69,6 +70,9 @@ from dewey.sqlalchemy.sweep import (
 )
 
 __all__ = [
+    "ReadinessError",
+    "check_readiness",
+    "check_readiness_async",
     # Dispatch
     "SQLAlchemyDispatchBackend",
     "AsyncSQLAlchemyDispatchBackend",

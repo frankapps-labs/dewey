@@ -3,6 +3,29 @@
 This changelog records the public Frankapps Dewey release lineage. Earlier versions under
 the `dewey` package name predate this lineage and are intentionally not represented here.
 
+## [Unreleased]
+
+### Fixed
+
+- Fence Django and SQLAlchemy sync/async execution outcomes with a fresh claim token;
+  recovered or operator-reset stale workers cannot overwrite a newer execution.
+  Add a nullable token column, Django migration and coordinated upgrade guidance.
+  SQLAlchemy locked reads refresh cached state; stuck sweeps lock candidates and
+  preserve consumed attempts. This does not introduce dispatch fencing or leases.
+- Harden the internal worker foundation's synchronous lifecycle contract: reject
+  async-generator callbacks/results, dispose rejected coroutine results, and report
+  observed child cleanup failures without exposing exception details. This primitive
+  is not connected to dispatch or exposed as a runnable native worker service.
+- Fail closed on malformed worker control messages and OS reap failures while
+  retaining uncertain assignment observations for durable reconciliation. Preserve
+  queued completion/error observations during shutdown, allow bounded graceful
+  cleanup after execution errors, and finish reaping after protocol failures.
+  Replace nonportable signal-based test probes with owned process-handle checks.
+- Add read-only SQLAlchemy sync/async startup schema/isolation checks; Django doctor
+  also rejects non-READ-COMMITTED isolation. Recovery passes skip locked failed and
+  dispatching rows; stuck recovery warns when overdue rows remain but none are
+  selected. Document lock-starvation monitoring and the durable delivery boundary.
+
 ## [0.5.3] - 2026-09-19
 
 ### Security

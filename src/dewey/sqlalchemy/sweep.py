@@ -42,6 +42,7 @@ def sweep_failed(
         )
         .order_by(TaskEntryModel.scheduled_for)
         .limit(limit)
+        .with_for_update(skip_locked=True)
     )
     task_ids = list(session.execute(stmt).scalars().all())
 
@@ -154,9 +155,14 @@ def sweep_stuck(
         .order_by(TaskEntryModel.started_at)
         .limit(limit)
     )
-    task_ids = list(session.execute(stmt).scalars().all())
+    task_ids = list(session.execute(stmt.with_for_update(skip_locked=True)).scalars().all())
 
     if not task_ids:
+        if limit > 0 and session.execute(stmt.limit(1)).first() is not None:
+            logger.warning(
+                "Stuck recovery selected no rows while overdue processing tasks remain; "
+                "check database locks and queue staleness (rows may change concurrently)"
+            )
         return []
 
     retry_rows = list(
@@ -167,7 +173,7 @@ def sweep_stuck(
                 TaskEntryModel.status == TaskStatus.PROCESSING.value,
                 TaskEntryModel.attempts < TaskEntryModel.max_attempts,
             )
-            .values(status=TaskStatus.PENDING.value)
+            .values(status=TaskStatus.PENDING.value, execution_token=None)
             .returning(TaskEntryModel.id, TaskEntryModel.queue)
         ).all()
     )
@@ -179,7 +185,7 @@ def sweep_stuck(
                 TaskEntryModel.status == TaskStatus.PROCESSING.value,
                 TaskEntryModel.attempts >= TaskEntryModel.max_attempts,
             )
-            .values(status=TaskStatus.DEAD.value)
+            .values(status=TaskStatus.DEAD.value, execution_token=None)
             .returning(TaskEntryModel.id)
         ).scalars()
     )
@@ -226,6 +232,7 @@ def sweep_dispatching(
         )
         .order_by(TaskEntryModel.dispatching_at)
         .limit(limit)
+        .with_for_update(skip_locked=True)
     )
     task_ids = list(session.execute(stmt).scalars().all())
 

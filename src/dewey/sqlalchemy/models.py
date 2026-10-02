@@ -75,6 +75,8 @@ class TaskEntryModel(Base):
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
     error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # Internal execution ownership; null for legacy/unclaimed rows, never a lease.
+    execution_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(

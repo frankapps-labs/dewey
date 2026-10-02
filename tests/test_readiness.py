@@ -275,6 +275,58 @@ class TestDoctor:
         with pytest.raises(CommandError):
             call_command("dewey_doctor", "--format", "json", stdout=StringIO())
 
+    @override_settings(DEWEY={"DISPATCH": record_dispatch})
+    def test_non_read_committed_isolation_is_not_ready(self):
+        from django.db import connection, transaction
+
+        self._heartbeat()
+        output = StringIO()
+        with transaction.atomic():
+            with connection.cursor() as cursor:
+                cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            with pytest.raises(CommandError):
+                call_command("dewey_doctor", "--format", "json", stdout=output)
+        findings = json.loads(output.getvalue())["findings"]
+        assert "dewey.doctor.isolation" in {finding["id"] for finding in findings}
+
+    @override_settings(DEWEY={"DISPATCH": record_dispatch})
+    def test_missing_execution_token_column_is_not_ready(self):
+        from django.db import connection
+
+        self._heartbeat()
+        output = StringIO()
+        with connection.cursor() as cursor:
+            cursor.execute("ALTER TABLE task_entries DROP COLUMN execution_token")
+        try:
+            with pytest.raises(CommandError):
+                call_command("dewey_doctor", "--format", "json", stdout=output)
+            findings = json.loads(output.getvalue())["findings"]
+            assert "dewey.doctor.execution_schema" in {finding["id"] for finding in findings}
+        finally:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "ALTER TABLE task_entries ADD COLUMN execution_token varchar(36) NULL"
+                )
+
+    @override_settings(DEWEY={"DISPATCH": record_dispatch})
+    def test_missing_ownership_migration_is_not_ready_even_with_column(self):
+        from django.db import connection
+        from django.db.migrations.recorder import MigrationRecorder
+
+        self._heartbeat()
+        recorder = MigrationRecorder(connection)
+        recorder.record_unapplied("dewey", "0003_execution_token")
+        output = StringIO()
+        try:
+            with pytest.raises(CommandError):
+                call_command("dewey_doctor", "--format", "json", stdout=output)
+            findings = json.loads(output.getvalue())["findings"]
+            migration_findings = [f for f in findings if f["id"] == "dewey.doctor.migrations"]
+            assert len(migration_findings) == 1
+            assert "0003_execution_token" in migration_findings[0]["message"]
+        finally:
+            recorder.record_applied("dewey", "0003_execution_token")
+
 
 def test_framework_heartbeat_helpers_are_frozen_and_queue_aware():
     now = datetime.now(UTC)

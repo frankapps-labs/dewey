@@ -18,6 +18,7 @@ from dewey.core.logging import (
     reset_trace_context,
     set_trace_context,
 )
+from dewey.core.ownership import new_execution_token
 from dewey.core.states import TaskStatus
 from dewey.core.validation import require_timezone_aware
 from dewey.policy import resolve_policy
@@ -191,7 +192,12 @@ async def process_task_async(
     Returns True if the task was processed successfully.
     """
     # Phase 1: Claim the task
-    stmt = select(TaskEntryModel).where(TaskEntryModel.id == task_id).with_for_update()
+    stmt = (
+        select(TaskEntryModel)
+        .where(TaskEntryModel.id == task_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     result = await session.execute(stmt)
     task = result.scalar_one_or_none()
 
@@ -236,12 +242,14 @@ async def process_task_async(
     task.started_at = now
     task.dispatching_at = None
     task.attempts += 1
+    task.execution_token = new_execution_token()
 
     # Cache values before commit (objects expire after commit)
     task_type = task.task_type
     task_args = list(task.args or [])
     task_kwargs = dict(task.kwargs or {})
     attempts = task.attempts
+    execution_token = task.execution_token
     max_attempts = task.max_attempts
     task_metadata = dict(task.task_metadata or {})
     policy = resolve_policy(task_type)
@@ -260,7 +268,12 @@ async def process_task_async(
             # Phase 3a: Mark failed or dead-lettered
             error_msg = str(exc)
 
-            stmt = select(TaskEntryModel).where(TaskEntryModel.id == task_id).with_for_update()
+            stmt = (
+                select(TaskEntryModel)
+                .where(TaskEntryModel.id == task_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
             result = await session.execute(stmt)
             task = result.scalar_one_or_none()
 
@@ -268,10 +281,11 @@ async def process_task_async(
                 logger.warning("Task disappeared during processing id=%s", task_id)
                 return False
 
+            # Status alone cannot distinguish this execution from a newer one.
             current = TaskStatus(task.status)
-            if current != TaskStatus.PROCESSING:
+            if current != TaskStatus.PROCESSING or task.execution_token != execution_token:
                 logger.info(
-                    "Task status changed during processing id=%s status=%s, skipping update",
+                    "Task state or ownership changed id=%s status=%s, skipping update",
                     task_id,
                     task.status,
                 )
@@ -288,6 +302,7 @@ async def process_task_async(
                 backoff=backoff,
             )
             task.status = outcome.status.value
+            task.execution_token = None
 
             if outcome.is_dead:
                 logger.error(
@@ -314,7 +329,12 @@ async def process_task_async(
             return False
 
         # Phase 3b: Mark completed
-        stmt = select(TaskEntryModel).where(TaskEntryModel.id == task_id).with_for_update()
+        stmt = (
+            select(TaskEntryModel)
+            .where(TaskEntryModel.id == task_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         result = await session.execute(stmt)
         task = result.scalar_one_or_none()
 
@@ -322,10 +342,11 @@ async def process_task_async(
             logger.warning("Task disappeared during processing id=%s", task_id)
             return False
 
+        # A recovered/operator-reset row may already belong to a newer execution.
         current = TaskStatus(task.status)
-        if current != TaskStatus.PROCESSING:
+        if current != TaskStatus.PROCESSING or task.execution_token != execution_token:
             logger.info(
-                "Task status changed during processing id=%s status=%s, skipping update",
+                "Task state or ownership changed id=%s status=%s, skipping update",
                 task_id,
                 task.status,
             )
@@ -333,6 +354,7 @@ async def process_task_async(
             return False
 
         task.status = TaskStatus.COMPLETED.value
+        task.execution_token = None
         task.completed_at = datetime.now(UTC)
         task.error = ""
         await session.commit()

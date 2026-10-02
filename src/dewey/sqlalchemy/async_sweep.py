@@ -38,6 +38,7 @@ async def sweep_failed_async(
         )
         .order_by(TaskEntryModel.scheduled_for)
         .limit(limit)
+        .with_for_update(skip_locked=True)
     )
     result = await session.execute(stmt)
     task_ids = list(result.scalars().all())
@@ -149,10 +150,15 @@ async def sweep_stuck_async(
         .order_by(TaskEntryModel.started_at)
         .limit(limit)
     )
-    result = await session.execute(stmt)
+    result = await session.execute(stmt.with_for_update(skip_locked=True))
     task_ids = list(result.scalars().all())
 
     if not task_ids:
+        if limit > 0 and (await session.execute(stmt.limit(1))).first() is not None:
+            logger.warning(
+                "Stuck recovery selected no rows while overdue processing tasks remain; "
+                "check database locks and queue staleness (rows may change concurrently)"
+            )
         return []
 
     retry_result = await session.execute(
@@ -162,7 +168,7 @@ async def sweep_stuck_async(
             TaskEntryModel.status == TaskStatus.PROCESSING.value,
             TaskEntryModel.attempts < TaskEntryModel.max_attempts,
         )
-        .values(status=TaskStatus.PENDING.value)
+        .values(status=TaskStatus.PENDING.value, execution_token=None)
         .returning(TaskEntryModel.id, TaskEntryModel.queue)
     )
     retry_rows = list(retry_result.all())
@@ -173,7 +179,7 @@ async def sweep_stuck_async(
             TaskEntryModel.status == TaskStatus.PROCESSING.value,
             TaskEntryModel.attempts >= TaskEntryModel.max_attempts,
         )
-        .values(status=TaskStatus.DEAD.value)
+        .values(status=TaskStatus.DEAD.value, execution_token=None)
         .returning(TaskEntryModel.id)
     )
     dead_ids = list(dead_result.scalars())
@@ -210,6 +216,7 @@ async def sweep_dispatching_async(
         )
         .order_by(TaskEntryModel.dispatching_at)
         .limit(limit)
+        .with_for_update(skip_locked=True)
     )
     result = await session.execute(stmt)
     task_ids = list(result.scalars().all())

@@ -203,6 +203,15 @@ Handlers should still be idempotent. Duplicate *transport* delivery is already h
 — the claim is atomic and a redelivered ID is a logged no-op — but a worker killed
 between a side effect and its commit can genuinely run a handler twice.
 
+## Execution ownership (unreleased)
+
+The unreleased executors attach a fresh internal token to each execution claim and
+require it on completion/failure. An old handler cannot overwrite a replacement's
+outcome merely because the row is `PROCESSING` again. This does not stop old side
+effects, fence ID-only dispatch messages or implement leases/native workers. See
+[execution ownership and coordinated upgrades](execution-ownership.md); old
+status-only writers must be stopped before this protection is relied on.
+
 ## What Dewey does not do
 
 - **It does not make your handler safe.** Bounded batches, resumability and idempotent

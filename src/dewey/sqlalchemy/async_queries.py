@@ -233,7 +233,12 @@ async def get_recent_async(
 
 async def retry_task_async(session: AsyncSession, task_id: str) -> TaskEntry | None:
     """Reset a failed/dead task back to pending for re-processing."""
-    stmt = select(TaskEntryModel).where(TaskEntryModel.id == task_id).with_for_update()
+    stmt = (
+        select(TaskEntryModel)
+        .where(TaskEntryModel.id == task_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     result = await session.execute(stmt)
     task = result.scalar_one_or_none()
     if task is None:
@@ -249,6 +254,7 @@ async def retry_task_async(session: AsyncSession, task_id: str) -> TaskEntry | N
     task.scheduled_for = None
     task.error = ""
     task.attempts = 0
+    task.execution_token = None
     await session.flush()
     await notify_work_available_async(session, kind="task", entry_id=task.id, queue=task.queue)
     return _to_dataclass(task)
@@ -285,6 +291,7 @@ async def bulk_retry_async(
         scheduled_for=None,
         error="",
         attempts=0,
+        execution_token=None,
     )
     result = await session.execute(stmt)
     await session.flush()
@@ -295,7 +302,12 @@ async def bulk_retry_async(
 
 async def kill_task_async(session: AsyncSession, task_id: str) -> TaskEntry | None:
     """Force a task to DEAD — stop retrying."""
-    stmt = select(TaskEntryModel).where(TaskEntryModel.id == task_id).with_for_update()
+    stmt = (
+        select(TaskEntryModel)
+        .where(TaskEntryModel.id == task_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     result = await session.execute(stmt)
     task = result.scalar_one_or_none()
     if task is None:
@@ -306,6 +318,7 @@ async def kill_task_async(session: AsyncSession, task_id: str) -> TaskEntry | No
         return _to_dataclass(task)
 
     task.status = TaskStatus.DEAD.value
+    task.execution_token = None
     await session.flush()
     return _to_dataclass(task)
 

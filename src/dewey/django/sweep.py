@@ -36,7 +36,7 @@ def sweep_failed(limit: int = 100, using: str | None = None) -> list[str]:
     with transaction.atomic(using=alias):
         task_ids = list(
             TaskEntry.objects.using(alias)
-            .select_for_update()
+            .select_for_update(skip_locked=True)
             .filter(
                 status=TaskStatus.FAILED.value,
                 scheduled_for__lte=now,
@@ -142,7 +142,7 @@ def sweep_stuck(
     with transaction.atomic(using=alias):
         task_ids = list(
             TaskEntry.objects.using(alias)
-            .select_for_update()
+            .select_for_update(skip_locked=True)
             .filter(
                 status=TaskStatus.PROCESSING.value,
                 started_at__lt=threshold,
@@ -152,6 +152,16 @@ def sweep_stuck(
         )
 
         if not task_ids:
+            if (
+                limit > 0
+                and TaskEntry.objects.using(alias)
+                .filter(status=TaskStatus.PROCESSING.value, started_at__lt=threshold)
+                .exists()
+            ):
+                logger.warning(
+                    "Stuck recovery selected no rows while overdue processing tasks remain; "
+                    "check database locks and queue staleness (rows may change concurrently)"
+                )
             return []
 
         retry_ids = list(
@@ -177,11 +187,13 @@ def sweep_stuck(
             id__in=retry_ids, status=TaskStatus.PROCESSING.value
         ).update(
             status=TaskStatus.PENDING.value,
+            execution_token=None,
         )
         TaskEntry.objects.using(alias).filter(
             id__in=dead_ids, status=TaskStatus.PROCESSING.value
         ).update(
             status=TaskStatus.DEAD.value,
+            execution_token=None,
         )
 
     if dead_ids:
@@ -218,7 +230,7 @@ def sweep_dispatching(
     with transaction.atomic(using=alias):
         task_ids = list(
             TaskEntry.objects.using(alias)
-            .select_for_update()
+            .select_for_update(skip_locked=True)
             .filter(
                 status=TaskStatus.DISPATCHING.value,
                 dispatching_at__lt=threshold,

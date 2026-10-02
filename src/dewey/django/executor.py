@@ -16,6 +16,7 @@ from dewey.core.logging import (
     reset_trace_context,
     set_trace_context,
 )
+from dewey.core.ownership import new_execution_token
 from dewey.core.states import TaskStatus
 from dewey.core.types import TaskEntry as TaskEntryDC
 from dewey.core.validation import require_timezone_aware
@@ -252,8 +253,16 @@ def process_task(
         task.started_at = now
         task.dispatching_at = None
         task.attempts += 1
+        task.execution_token = new_execution_token()
         task.save(
-            update_fields=["status", "started_at", "dispatching_at", "attempts", "updated_at"]
+            update_fields=[
+                "status",
+                "started_at",
+                "dispatching_at",
+                "attempts",
+                "execution_token",
+                "updated_at",
+            ]
         )
 
     # Cache values (task object still usable after atomic block exits)
@@ -261,6 +270,7 @@ def process_task(
     task_args = list(task.args or [])
     task_kwargs = dict(task.kwargs or {})
     attempts = task.attempts
+    execution_token = task.execution_token
     max_attempts = task.max_attempts
     task_metadata = dict(task.metadata or {})
     policy = resolve_policy(task_type)
@@ -284,11 +294,11 @@ def process_task(
                     logger.warning("Task disappeared during processing id=%s", task_id)
                     return False
 
-                # Task was killed mid-processing — respect the kill
+                # A recovered/operator-reset row may already belong to a newer execution.
                 current = TaskStatus(task.status)
-                if current != TaskStatus.PROCESSING:
+                if current != TaskStatus.PROCESSING or task.execution_token != execution_token:
                     logger.info(
-                        "Task status changed during processing id=%s status=%s, skipping update",
+                        "Task state or ownership changed id=%s status=%s, skipping update",
                         task_id,
                         task.status,
                     )
@@ -304,6 +314,7 @@ def process_task(
                     backoff=backoff,
                 )
                 task.status = outcome.status.value
+                task.execution_token = None
 
                 if outcome.is_dead:
                     logger.error(
@@ -326,7 +337,15 @@ def process_task(
                         exc,
                     )
 
-                task.save(update_fields=["status", "error", "scheduled_for", "updated_at"])
+                task.save(
+                    update_fields=[
+                        "status",
+                        "error",
+                        "scheduled_for",
+                        "execution_token",
+                        "updated_at",
+                    ]
+                )
 
             return False
 
@@ -338,20 +357,23 @@ def process_task(
                 logger.warning("Task disappeared during processing id=%s", task_id)
                 return False
 
-            # Task was killed mid-processing — respect the kill
+            # Status alone cannot distinguish this execution from a newer one.
             current = TaskStatus(task.status)
-            if current != TaskStatus.PROCESSING:
+            if current != TaskStatus.PROCESSING or task.execution_token != execution_token:
                 logger.info(
-                    "Task status changed during processing id=%s status=%s, skipping update",
+                    "Task state or ownership changed id=%s status=%s, skipping update",
                     task_id,
                     task.status,
                 )
                 return False
 
             task.status = TaskStatus.COMPLETED.value
+            task.execution_token = None
             task.completed_at = datetime.now(UTC)
             task.error = ""
-            task.save(update_fields=["status", "completed_at", "error", "updated_at"])
+            task.save(
+                update_fields=["status", "completed_at", "error", "execution_token", "updated_at"]
+            )
 
         logger.info("Task completed id=%s type=%s", task_id, task_type)
         return True

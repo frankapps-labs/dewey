@@ -47,9 +47,33 @@ class Command(BaseCommand):
             connection.ensure_connection()
             if connection.vendor != "postgresql":
                 add("dewey.doctor.database_backend", "error", "Dewey requires PostgreSQL.")
+            else:
+                with connection.cursor() as cursor:
+                    cursor.execute("SHOW transaction_isolation")
+                    isolation = cursor.fetchone()[0]
+                if isolation != "read committed":
+                    add(
+                        "dewey.doctor.isolation",
+                        "error",
+                        "Dewey requires READ COMMITTED isolation and dedicated execution connections.",
+                    )
             tables = set(connection.introspection.table_names())
             if "task_entries" not in tables:
                 add("dewey.doctor.schema", "error", "task_entries is not reachable.")
+            else:
+                with connection.cursor() as cursor:
+                    columns = {
+                        column.name
+                        for column in connection.introspection.get_table_description(
+                            cursor, "task_entries"
+                        )
+                    }
+                if "execution_token" not in columns:
+                    add(
+                        "dewey.doctor.execution_schema",
+                        "error",
+                        "execution_token is missing; apply the ownership migration before starting writers.",
+                    )
             if "dewey_dispatcher_heartbeats" not in tables:
                 add(
                     "dewey.doctor.heartbeat_schema",
@@ -57,8 +81,13 @@ class Command(BaseCommand):
                     "dewey_dispatcher_heartbeats is not reachable; apply Dewey migrations.",
                 )
             applied = set(MigrationRecorder(connection).applied_migrations())
-            if ("dewey", "0002_task_expiry_and_dispatcher_heartbeat") not in applied:
-                add("dewey.doctor.migrations", "error", "Dewey migration 0002 is not applied.")
+            for migration in ("0002_task_expiry_and_dispatcher_heartbeat", "0003_execution_token"):
+                if ("dewey", migration) not in applied:
+                    add(
+                        "dewey.doctor.migrations",
+                        "error",
+                        f"Dewey migration {migration} is not applied.",
+                    )
 
             configured_queues = config["QUEUES"]
             requested = (

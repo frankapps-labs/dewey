@@ -192,7 +192,17 @@ def retry_task(task_id: str, using: str | None = None) -> TaskEntryDC | None:
         task.scheduled_for = None
         task.error = ""
         task.attempts = 0
-        task.save(update_fields=["status", "scheduled_for", "error", "attempts", "updated_at"])
+        task.execution_token = None
+        task.save(
+            update_fields=[
+                "status",
+                "scheduled_for",
+                "error",
+                "attempts",
+                "execution_token",
+                "updated_at",
+            ]
+        )
         return task.to_dataclass()
 
 
@@ -219,6 +229,7 @@ def bulk_retry(
         scheduled_for=None,
         error="",
         attempts=0,
+        execution_token=None,
     )
 
 
@@ -239,7 +250,8 @@ def kill_task(task_id: str, using: str | None = None) -> TaskEntryDC | None:
             return task.to_dataclass()
 
         task.status = TaskStatus.DEAD.value
-        task.save(update_fields=["status", "updated_at"])
+        task.execution_token = None
+        task.save(update_fields=["status", "execution_token", "updated_at"])
         return task.to_dataclass()
 
 

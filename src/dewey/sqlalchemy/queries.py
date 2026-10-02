@@ -224,7 +224,12 @@ def get_recent(
 
 def retry_task(session: Session, task_id: str) -> TaskEntry | None:
     """Reset a failed/dead task back to pending for re-processing."""
-    stmt = select(TaskEntryModel).where(TaskEntryModel.id == task_id).with_for_update()
+    stmt = (
+        select(TaskEntryModel)
+        .where(TaskEntryModel.id == task_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     task = session.execute(stmt).scalar_one_or_none()
     if task is None:
         return None
@@ -239,6 +244,7 @@ def retry_task(session: Session, task_id: str) -> TaskEntry | None:
     task.scheduled_for = None
     task.error = ""
     task.attempts = 0
+    task.execution_token = None
     session.flush()
     notify_work_available(session, kind="task", entry_id=task.id, queue=task.queue)
     return _to_dataclass(task)
@@ -275,6 +281,7 @@ def bulk_retry(
         scheduled_for=None,
         error="",
         attempts=0,
+        execution_token=None,
     )
     result = session.execute(stmt)
     session.flush()
@@ -285,7 +292,12 @@ def bulk_retry(
 
 def kill_task(session: Session, task_id: str) -> TaskEntry | None:
     """Force a task to DEAD — stop retrying."""
-    stmt = select(TaskEntryModel).where(TaskEntryModel.id == task_id).with_for_update()
+    stmt = (
+        select(TaskEntryModel)
+        .where(TaskEntryModel.id == task_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     task = session.execute(stmt).scalar_one_or_none()
     if task is None:
         return None
@@ -295,6 +307,7 @@ def kill_task(session: Session, task_id: str) -> TaskEntry | None:
         return _to_dataclass(task)
 
     task.status = TaskStatus.DEAD.value
+    task.execution_token = None
     session.flush()
     return _to_dataclass(task)
 

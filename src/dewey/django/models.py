@@ -64,6 +64,8 @@ class TaskEntry(models.Model):
     attempts = models.IntegerField(default=0)
     max_attempts = models.IntegerField(default=5)
     error = models.TextField(default="", blank=True)
+    # Internal execution ownership; null for legacy/unclaimed rows, never a lease.
+    execution_token = models.CharField(max_length=36, null=True, editable=False)
 
     # Timestamps
     created_at = models.DateTimeField(default=utcnow, db_index=True)
