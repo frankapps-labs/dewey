@@ -83,27 +83,15 @@ class TestCreateTask:
 
 
 class TestScheduledForValidation:
-    """Naive scheduled_for fails fast — exact error, no row written, no NOTIFY sent."""
+    """Naive scheduled_for fails fast — exact error, no row written."""
 
-    def _spy_notifications(self, monkeypatch):
-        notifications = []
-        monkeypatch.setattr(
-            executor_module,
-            "notify_work_available",
-            lambda *args, **kwargs: notifications.append((args, kwargs)),
-        )
-        return notifications
-
-    def test_create_task_rejects_naive_before_row_or_notify(self, session, monkeypatch):
-        notifications = self._spy_notifications(monkeypatch)
+    def test_create_task_rejects_naive_before_row(self, session):
         with pytest.raises(ValueError) as excinfo:
             create_task(session, task_type="reminder.send", scheduled_for=datetime.now())
         assert str(excinfo.value) == "scheduled_for must be a timezone-aware datetime"
-        assert notifications == []
         assert session.query(TaskEntryModel).count() == 0
 
-    def test_create_or_get_task_rejects_naive_before_row_or_notify(self, session, monkeypatch):
-        notifications = self._spy_notifications(monkeypatch)
+    def test_create_or_get_task_rejects_naive_before_row(self, session):
         with pytest.raises(ValueError) as excinfo:
             create_or_get_task(
                 session,
@@ -112,7 +100,6 @@ class TestScheduledForValidation:
                 scheduled_for=datetime.now(),
             )
         assert str(excinfo.value) == "scheduled_for must be a timezone-aware datetime"
-        assert notifications == []
         assert session.query(TaskEntryModel).count() == 0
 
     @pytest.mark.parametrize(
@@ -507,7 +494,6 @@ class TestHandlerInvocation:
 
 class TestExpiry:
     def test_deadline_is_checked_after_the_task_lock_is_acquired(self, session, monkeypatch):
-        import dewey.sqlalchemy.executor as executor_module
 
         before = datetime.now(UTC)
         deadline = before + timedelta(minutes=1)

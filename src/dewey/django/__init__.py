@@ -1,4 +1,4 @@
-"""Django adapter for Dewey — models, executor, sweep, and queries.
+"""Django adapter for Dewey — models, task creation and queries.
 
 Everything here is imported lazily. Dewey's Django models must not be imported
 before Django's app registry is ready, and producers should not pay import-time
@@ -13,17 +13,11 @@ _LAZY: dict[str, str] = {
     "create_task": "dewey.django.executor",
     "create_or_get_task": "dewey.django.executor",
     "process_task": "dewey.django.executor",
-    # Sweep
-    "sweep": "dewey.django.sweep",
-    "sweep_failed": "dewey.django.sweep",
-    "sweep_stuck": "dewey.django.sweep",
-    "sweep_dispatching": "dewey.django.sweep",
-    "sweep_expired": "dewey.django.sweep",
     # Queries and actions
     "get_stats": "dewey.django.queries",
     "get_pending": "dewey.django.queries",
     "get_dispatching": "dewey.django.queries",
-    "get_dispatchers": "dewey.django.queries",
+    "get_workers": "dewey.django.queries",
     "get_processing": "dewey.django.queries",
     "get_stuck": "dewey.django.queries",
     "get_failed": "dewey.django.queries",
@@ -54,9 +48,6 @@ if TYPE_CHECKING:  # re-exported for type checkers and IDE completion
         get_dead as get_dead,
     )
     from dewey.django.queries import (
-        get_dispatchers as get_dispatchers,
-    )
-    from dewey.django.queries import (
         get_dispatching as get_dispatching,
     )
     from dewey.django.queries import (
@@ -84,6 +75,9 @@ if TYPE_CHECKING:  # re-exported for type checkers and IDE completion
         get_task as get_task,
     )
     from dewey.django.queries import (
+        get_workers as get_workers,
+    )
+    from dewey.django.queries import (
         kill_task as kill_task,
     )
     from dewey.django.queries import (
@@ -92,28 +86,13 @@ if TYPE_CHECKING:  # re-exported for type checkers and IDE completion
     from dewey.django.queries import (
         retry_task as retry_task,
     )
-    from dewey.django.sweep import (
-        sweep as sweep,
-    )
-    from dewey.django.sweep import (
-        sweep_dispatching as sweep_dispatching,
-    )
-    from dewey.django.sweep import (
-        sweep_expired as sweep_expired,
-    )
-    from dewey.django.sweep import (
-        sweep_failed as sweep_failed,
-    )
-    from dewey.django.sweep import (
-        sweep_stuck as sweep_stuck,
-    )
 
 __all__ = [
     "bulk_retry",
     "create_or_get_task",
     "create_task",
     "get_dead",
-    "get_dispatchers",
+    "get_workers",
     "get_dispatching",
     "get_expired",
     "get_failed",
@@ -127,21 +106,14 @@ __all__ = [
     "process_task",
     "purge_completed",
     "retry_task",
-    "sweep",
-    "sweep_dispatching",
-    "sweep_expired",
-    "sweep_failed",
-    "sweep_stuck",
 ]
 
 
 def __getattr__(name: str) -> Any:
     """Resolve a public name to its implementation, once.
 
-    The resolved object is cached in this module's namespace, which also settles
-    an ambiguity: ``dewey.django.sweep`` is both a submodule and a function, and
-    without the cache the name resolves to the function on first access and to the
-    submodule afterwards.
+    The resolved object is cached in this module's namespace, so a name that is
+    both a submodule and a function resolves to the function every time.
     """
     module_path = _LAZY.get(name)
     if module_path is None:

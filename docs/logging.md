@@ -4,19 +4,13 @@
 
 | Logger | Emits |
 |---|---|
-| `dewey.dispatcher` | claim/dispatch counts, transport failures and backoff, sweep results, start and stop |
-| `dewey.sqlalchemy.executor` / `dewey.django.executor` | task created, claimed, completed, failed with attempt counts and the next retry time |
-| `dewey.sqlalchemy.dispatch` / `dewey.django.dispatch` | LISTEN availability, degradation to polling |
-| `dewey.listen_sync` | listen connection lifecycle |
-| `dewey.adapters.huey` | processor registration |
+| `dewey.worker` | worker start and stop, schedule drift at startup, supervision faults (never payloads or raw database errors) |
+| `dewey.sqlalchemy.executor` / `dewey.django.executor` | task created; for inline execution: claimed, completed, failed with attempt counts and the next retry time |
+| `dewey.alerts` | an alert hook that raised |
 
-Every task-level line carries `id=` and `type=`, and failure lines carry `attempts=`,
-`retry_at=` and `reason=` — so `reason=non-retryable` versus `reason=attempts exhausted`
-distinguishes "the handler said never" from "the budget ran out" without reading code.
-
-A dispatch failure logs at WARNING with how many claims were returned to `PENDING`, and
-recovery logs once at INFO ("Transport recovered"). Those two lines bound a broker outage
-in your logs.
+Every task-level line carries `id=` and `type=`. What happened to a task in a worker
+is in the ledger rather than the log: `dewey tasks show <id>` prints its history, and
+the [alert hook](operations.md#alerts) tells you about the outcomes that need a person.
 
 ## Logging & trace context
 
@@ -51,7 +45,6 @@ that round-trips through `metadata["trace"]` on the task row.
 ```python
 from dewey.core.logging import (
     TraceContextFilter,    # logging.Filter for the consumer side
-    bind_to_metadata,      # producer-side: snapshot current context
     set_trace_context,     # producer-side: set context (or use middleware)
     reset_trace_context,   # producer-side: pop context
 )
@@ -69,14 +62,13 @@ async def request_id_middleware(request, call_next):
     finally:
         reset_trace_context(token)
 
-# Webhook handler
-await create_task_async(
-    session,
-    task_type="order.confirmed",
-    payload=body,
-    metadata=bind_to_metadata({"source": "webhook"}),  # captures request_id
-)
+# Anywhere below it: the context is captured for you.
+await create_task_async(session, task_type="order.confirmed", args=[order_id])
 ```
+
+`create_task` stores the current trace context on the row. If OpenTelemetry is
+installed and a span is active, its W3C `traceparent` is stored too; nothing else is
+required, and OpenTelemetry is never a dependency.
 
 **Consumer (your logging config):**
 
@@ -91,9 +83,11 @@ handler.setFormatter(
 )
 ```
 
-Dewey automatically restores `metadata["trace"]` into the contextvar before
-invoking your handler, so every log line produced during Phase 2 (handler)
-and Phase 3 (status writes) is tagged with the originating request_id.
+The worker restores `metadata["trace"]` around your handler, so every log line the
+handler produces is tagged with the originating request. When the row carries a
+`traceparent` and OpenTelemetry is installed in the worker, spans the handler starts
+join the creator's trace. Workers in other languages receive the same dict in the
+[pull-runner](pull-runners.md) invocation.
 
 JSON formatters (logfire, python-json-logger, structlog renderers) pick up
 `record.dewey_trace` (full dict) and `record.dewey_<field>` (flattened)

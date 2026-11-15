@@ -57,6 +57,9 @@ from typing import Any
 #: Key inside a task's ``metadata`` dict used to carry
 #: the trace context across the worker boundary.
 TRACE_METADATA_KEY = "trace"
+#: Key of the W3C trace parent inside the trace context.
+TRACEPARENT = "traceparent"
+TRACESTATE = "tracestate"
 
 
 # Default is ``None`` (not ``{}``) to avoid the well-known ContextVar
@@ -117,6 +120,9 @@ def bind_to_metadata(
     """
     out: dict[str, Any] = dict(metadata) if metadata else {}
     ctx = get_trace_context()
+    for header, value in ((TRACEPARENT, current_traceparent()), (TRACESTATE, _tracestate())):
+        if value is not None:
+            ctx.setdefault(header, value)
     if ctx:
         existing = dict(out.get(TRACE_METADATA_KEY) or {})
         existing.update(ctx)
@@ -151,6 +157,61 @@ def restore_trace_context(metadata: dict[str, Any] | None) -> Iterator[dict[str,
         _trace_context.reset(token)
 
 
+def current_traceparent() -> str | None:
+    """The W3C ``traceparent`` of the active OpenTelemetry span, if there is one.
+
+    OpenTelemetry is optional: without it (or without a recording span) task
+    creation carries only what was put into the trace context by hand.
+    """
+    span = _active_span()
+    if span is None:
+        return None
+    return f"00-{span.trace_id:032x}-{span.span_id:016x}-{int(span.trace_flags):02x}"
+
+
+def _active_span() -> Any | None:
+    try:
+        from opentelemetry import trace  # type: ignore[import-not-found]
+    except ImportError:
+        return None
+    span = trace.get_current_span().get_span_context()
+    return span if span.is_valid else None
+
+
+def _tracestate() -> str | None:
+    """The vendor state that travels with a ``traceparent``, when there is any."""
+    span = _active_span()
+    return (span.trace_state.to_header() or None) if span is not None else None
+
+
+@contextmanager
+def restore_trace(trace: dict[str, Any] | None) -> Iterator[dict[str, Any]]:
+    """Run a handler under the trace context its task was created with.
+
+    Log records gain the creator's correlation fields, and when OpenTelemetry
+    is installed and the task carries a ``traceparent``, spans started by the
+    handler join the creator's trace.
+    """
+    ctx = dict(trace) if isinstance(trace, dict) else {}
+    token = _trace_context.set(ctx or None)
+    detach = None
+    if isinstance(ctx.get(TRACEPARENT), str):
+        try:
+            from opentelemetry import context, propagate  # type: ignore[import-not-found]
+
+            carrier = {h: ctx[h] for h in (TRACEPARENT, TRACESTATE) if isinstance(ctx.get(h), str)}
+            attached = context.attach(propagate.extract(carrier))
+            detach = lambda: context.detach(attached)  # noqa: E731
+        except ImportError:
+            pass
+    try:
+        yield ctx
+    finally:
+        if detach is not None:
+            detach()
+        _trace_context.reset(token)
+
+
 class TraceContextFilter(logging.Filter):
     """Logging filter that attaches the current Dewey trace context to every record.
 
@@ -174,12 +235,15 @@ class TraceContextFilter(logging.Filter):
 
 
 __all__ = [
+    "TRACEPARENT",
     "TRACE_METADATA_KEY",
     "TraceContextFilter",
     "bind_to_metadata",
+    "current_traceparent",
     "extract_trace_context",
     "get_trace_context",
     "reset_trace_context",
+    "restore_trace",
     "restore_trace_context",
     "set_trace_context",
     "update_trace_context",

@@ -26,10 +26,8 @@ django.setup()
 
 import dewey
 from dewey.core.states import TaskStatus
-from dewey.django.dispatch import DjangoDispatchBackend
 from dewey.django.executor import create_task, process_task
 from dewey.django.models import TaskEntry, resolve_db_alias
-from dewey.django.sweep import sweep
 
 
 @pytest.fixture(autouse=True)
@@ -38,19 +36,6 @@ def clean_registry():
     policy registry is ours to reset."""
     yield
     dewey.registry.clear()
-
-
-@pytest.fixture
-def captured_notify(monkeypatch):
-    """Record the alias each NOTIFY is sent on, instead of sending it."""
-    calls: list[dict] = []
-
-    def capture(**kwargs):
-        calls.append(kwargs)
-        return True
-
-    monkeypatch.setattr("dewey.django.executor.notify_work_available", capture)
-    return calls
 
 
 class DeweyRouter:
@@ -87,14 +72,6 @@ def _fail_row(task_id: str, alias: str) -> None:
 class TestExplicitAlias:
     """`using="second"` pins every statement to that alias."""
 
-    def test_create_task_writes_the_row_and_the_notify_to_the_alias(self, captured_notify):
-        task = create_task(task_type="t", using="second")
-
-        assert TaskEntry.objects.using("second").filter(id=task.id).exists()
-        assert not TaskEntry.objects.using("default").filter(id=task.id).exists()
-        # The NOTIFY must ride the transaction that wrote the row.
-        assert [call["using"] for call in captured_notify] == ["second"]
-
     def test_process_task_claims_and_completes_on_the_alias(self):
         seen = []
 
@@ -124,34 +101,6 @@ class TestExplicitAlias:
         assert row.status == TaskStatus.FAILED.value
         assert row.attempts == 1
 
-    def test_sweep_re_enqueues_only_on_the_given_alias(self):
-        on_second = create_task(task_type="t", max_attempts=5, using="second")
-        on_default = create_task(task_type="t", max_attempts=5)
-        _fail_row(on_second.id, "second")
-        _fail_row(on_default.id, "default")
-
-        result = sweep(using="second")
-
-        assert result["failed"] == [on_second.id]
-        assert (
-            TaskEntry.objects.using("second").get(id=on_second.id).status
-            == TaskStatus.PENDING.value
-        )
-        # The default database was not swept — the pass stayed on its alias.
-        assert (
-            TaskEntry.objects.using("default").get(id=on_default.id).status
-            == TaskStatus.FAILED.value
-        )
-
-    def test_the_dispatch_backend_sweeps_on_its_own_alias(self):
-        task = create_task(task_type="t", max_attempts=5, using="second")
-        _fail_row(task.id, "second")
-
-        result = DjangoDispatchBackend(using="second").run_sweep()
-
-        assert result["failed"] == [task.id]
-        assert TaskEntry.objects.using("second").get(id=task.id).status == TaskStatus.PENDING.value
-
 
 @pytest.mark.django_db(transaction=True, databases=["default", "second"])
 class TestRouterResolution:
@@ -161,13 +110,6 @@ class TestRouterResolution:
     def test_the_alias_resolves_through_the_router(self, dewey_router):
         assert resolve_db_alias() == "second"
         assert resolve_db_alias("default") == "default"  # explicit still wins
-
-    def test_create_task_follows_the_router(self, dewey_router, captured_notify):
-        task = create_task(task_type="t")
-
-        assert TaskEntry.objects.using("second").filter(id=task.id).exists()
-        assert not TaskEntry.objects.using("default").filter(id=task.id).exists()
-        assert [call["using"] for call in captured_notify] == ["second"]
 
     def test_process_task_transacts_on_the_routed_alias(self, dewey_router):
         # Before the alias was resolved up front, this raised
@@ -186,15 +128,6 @@ class TestRouterResolution:
         assert seen == [7]
         row = TaskEntry.objects.using("second").get(id=task.id)
         assert row.status == TaskStatus.COMPLETED.value
-
-    def test_sweep_follows_the_router(self, dewey_router):
-        task = create_task(task_type="t", max_attempts=5)
-        _fail_row(task.id, "second")
-
-        result = sweep()
-
-        assert result["failed"] == [task.id]
-        assert TaskEntry.objects.using("second").get(id=task.id).status == TaskStatus.PENDING.value
 
 
 class _RollBack(Exception):

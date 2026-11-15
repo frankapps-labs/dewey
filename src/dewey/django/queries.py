@@ -7,18 +7,19 @@ from datetime import UTC, datetime, timedelta
 from django.db import transaction
 from django.db.models import Count
 
+from dewey._worker.ledger import CLEAR_NATIVE, OWNERSHIP_FIELDS, clear_native
 from dewey.core.heartbeat import DEFAULT_HEARTBEAT_STALE_SECONDS
-from dewey.core.heartbeat import DispatcherHeartbeat as HeartbeatDC
+from dewey.core.heartbeat import WorkerHeartbeat as HeartbeatDC
 from dewey.core.states import TaskStatus
 from dewey.core.types import TaskEntry as TaskEntryDC
-from dewey.django.models import DispatcherHeartbeat, TaskEntry, resolve_db_alias
+from dewey.django.models import TaskEntry, WorkerHeartbeat, resolve_db_alias
 
 
 def _to_list(qs) -> list[TaskEntryDC]:
     return [obj.to_dataclass() for obj in qs]
 
 
-def get_dispatchers(
+def get_workers(
     *,
     using: str = "default",
     database: str | None = None,
@@ -26,9 +27,9 @@ def get_dispatchers(
     fresh_within_seconds: float = DEFAULT_HEARTBEAT_STALE_SECONDS,
     now: datetime | None = None,
 ) -> list[HeartbeatDC]:
-    """Fresh dispatchers matching the requested database identity and queues."""
+    """Fresh workers matching the requested database identity and queues."""
     observed_at = now or datetime.now(UTC)
-    qs = DispatcherHeartbeat.objects.using(using).filter(
+    qs = WorkerHeartbeat.objects.using(using).filter(
         last_seen_at__gte=observed_at - timedelta(seconds=fresh_within_seconds)
     )
     if database is not None:
@@ -99,11 +100,15 @@ def get_dispatching(limit: int = 50) -> list[TaskEntryDC]:
 
 
 def get_stuck(older_than_minutes: int = 10) -> list[TaskEntryDC]:
-    """Tasks in PROCESSING too long — sweep candidates."""
+    """PROCESSING tasks no worker owns that started long ago: left by ``process_task``."""
     threshold = datetime.now(UTC) - timedelta(minutes=older_than_minutes)
     qs = TaskEntry.objects.filter(
         status=TaskStatus.PROCESSING.value,
         started_at__lt=threshold,
+        dispatch_token__isnull=True,
+        worker_id__isnull=True,
+        lease_expires_at__isnull=True,
+        execution_deadline_at__isnull=True,
     ).order_by("started_at")
     return _to_list(qs)
 
@@ -192,7 +197,19 @@ def retry_task(task_id: str, using: str | None = None) -> TaskEntryDC | None:
         task.scheduled_for = None
         task.error = ""
         task.attempts = 0
-        task.save(update_fields=["status", "scheduled_for", "error", "attempts", "updated_at"])
+        clear_native(task)
+        task.execution_token = None
+        task.save(
+            update_fields=[
+                "status",
+                "scheduled_for",
+                "error",
+                "attempts",
+                *OWNERSHIP_FIELDS,
+                "execution_token",
+                "updated_at",
+            ]
+        )
         return task.to_dataclass()
 
 
@@ -202,7 +219,7 @@ def bulk_retry(
 ) -> int:
     """
     Retry all failed (or dead) tasks, optionally filtered by type.
-    Returns count of tasks re-enqueued.
+    Returns the number of tasks made pending again.
 
     Raises ValueError if the source status doesn't allow transition to PENDING.
     """
@@ -219,6 +236,8 @@ def bulk_retry(
         scheduled_for=None,
         error="",
         attempts=0,
+        execution_token=None,
+        **CLEAR_NATIVE,
     )
 
 
@@ -239,7 +258,9 @@ def kill_task(task_id: str, using: str | None = None) -> TaskEntryDC | None:
             return task.to_dataclass()
 
         task.status = TaskStatus.DEAD.value
-        task.save(update_fields=["status", "updated_at"])
+        clear_native(task)
+        task.execution_token = None
+        task.save(update_fields=["status", "execution_token", "updated_at", *OWNERSHIP_FIELDS])
         return task.to_dataclass()
 
 
@@ -258,5 +279,6 @@ def purge_completed(
     )
     if task_type:
         qs = qs.filter(task_type=task_type)
-    count, _ = qs.delete()
-    return count
+    _, deleted = qs.delete()
+    # Preserve the public task count, excluding cascaded transition history.
+    return deleted.get(TaskEntry._meta.label, 0)

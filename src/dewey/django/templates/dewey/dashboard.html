@@ -1,0 +1,9 @@
+{% extends "admin/base_site.html" %}
+{% block extrastyle %}{{ block.super }}<link rel="stylesheet" href="{{ css_url }}">{% endblock %}
+{% block content_title %}{% endblock %}
+{% block content %}
+<div data-dewey-dashboard data-retention="true" data-api-base="{{ api_base }}" data-theme="{{ theme_mode }}" data-csrf-token="{{ csrf_token_value }}">
+  <p>Loading task observations…</p>
+</div>
+<script type="module" src="{{ js_url }}"></script>
+{% endblock %}

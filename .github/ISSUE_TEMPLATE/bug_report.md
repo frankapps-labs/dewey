@@ -28,8 +28,8 @@ FROM task_entries WHERE id = '...';
 - ORM: SQLAlchemy sync / SQLAlchemy async / Django (version)
 - Postgres driver: psycopg2 / psycopg3 / asyncpg (version)
 - PostgreSQL version:
-- Transport: Huey / in-process / other
-- Number of dispatcher processes:
+- Workers: how many `dewey run` processes, and their `--concurrency`
+- Output of `dewey doctor --json`:
 
 ## Relevant logs
 

@@ -1,31 +1,31 @@
 """End-to-end scenario for the installed wheel.
 
 Runs inside a clean virtualenv (see wheel_smoke.sh), against a fresh database, as a
-minimal Django project. Proves the path a first consumer actually takes:
+minimal Django project written to the working directory. Proves the path a first
+consumer actually takes:
 
 1. ``migrate`` creates the schema from the shipped migrations
-2. a task is declared with ``@dewey.task`` and created inside an atomic block
-3. the dispatcher claims it and hands the ID to Huey
-4. a Huey worker processes it through Dewey's state machine to COMPLETED
-
-Then the failure modes that matter operationally:
-
-5. a task committed while Redis is unreachable survives and dispatches after recovery
-6. a duplicate delivery is harmless
-7. a rolled-back producer transaction leaves nothing to dispatch
-8. a failing handler retries on Dewey's schedule and dead-letters on budget
+2. a task is declared with ``@dewey.task`` and created inside an atomic block;
+   a rolled-back producer transaction leaves nothing behind
+3. ``manage.py dewey run`` (one process type, no broker) claims and completes it
+4. the worker applies the declared schedule and turns a due tick into a task
+5. a failing task dead-letters, and ``dewey dlq list`` shows it
+6. ``dewey doctor`` reports ready while the worker runs
+7. SIGTERM drains the worker and it exits 0
 """
 
 from __future__ import annotations
 
+import json
 import os
+import signal
+import subprocess
 import sys
 import time
-from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from urllib.parse import urlparse
 
 DB_URL = os.environ["DEWEY_SMOKE_DB_URL"]
-REDIS_URL = os.environ["DEWEY_SMOKE_REDIS_URL"]
 DB_NAME = os.environ.get("DEWEY_SMOKE_DB_NAME", "dewey_wheel_smoke")
 
 parsed = urlparse(DB_URL)
@@ -33,10 +33,53 @@ DB_HOST = parsed.hostname or "localhost"
 DB_PORT = parsed.port or 5432
 DB_USER = parsed.username or "postgres"
 DB_PASSWORD = parsed.password or "postgres"
-redis_parsed = urlparse(REDIS_URL)
-REDIS_ENDPOINT = f"{redis_parsed.hostname or 'localhost'}:{redis_parsed.port or 6379}"
 
 failures: list[str] = []
+
+# The project reads its connection from the environment, as a real one should:
+# no credential is written to disk.
+SETTINGS = """
+import os
+from urllib.parse import urlparse
+
+_db = urlparse(os.environ["DEWEY_SMOKE_DB_URL"])
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.environ.get("DEWEY_SMOKE_DB_NAME", "dewey_wheel_smoke"),
+        "USER": _db.username or "postgres",
+        "PASSWORD": _db.password or "postgres",
+        "HOST": _db.hostname or "localhost",
+        "PORT": str(_db.port or 5432),
+    }
+}
+INSTALLED_APPS = ["dewey.django", "smokeapp"]
+USE_TZ = True
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+DEWEY = {
+    "AUTO_APPLY_SCHEDULES": True,
+    "TIMING": {
+        "renewal_interval_seconds": 1,
+        "poll_interval_seconds": 0.2,
+        "db_wait_seconds": 1,
+        "termination_seconds": 2,
+    },
+}
+"""
+
+TASKS = """
+import dewey
+
+
+@dewey.task("smoke.double", schedule=dewey.every(minutes=1))
+def double(value: int = 21) -> None:
+    assert dewey.current_task().remaining() is not None
+
+
+@dewey.task("smoke.broken")
+def broken() -> None:
+    raise ValueError("synthetic failure")
+"""
 
 
 def check(label: str, condition: bool, detail: str = "") -> None:
@@ -65,277 +108,112 @@ def recreate_database() -> None:
     print(f"    ok  fresh database {DB_NAME}")
 
 
-def configure_django() -> None:
-    import django
-    from django.conf import settings
-    from huey import MemoryHuey
-
-    settings.configure(
-        DATABASES={
-            "default": {
-                "ENGINE": "django.db.backends.postgresql",
-                "NAME": DB_NAME,
-                "USER": DB_USER,
-                "PASSWORD": DB_PASSWORD,
-                "HOST": DB_HOST,
-                "PORT": str(DB_PORT),
-            }
-        },
-        INSTALLED_APPS=["dewey.django"],
-        USE_TZ=True,
-        DEFAULT_AUTO_FIELD="django.db.models.BigAutoField",
-        HUEY=MemoryHuey("dewey-contrib-smoke", immediate=True),
-        DEWEY={"DISPATCH": "dewey.contrib.django_huey.dispatch"},
-    )
-    django.setup()
+def write_project() -> dict[str, str]:
+    Path("smoke_settings.py").write_text(SETTINGS)
+    Path("smokeapp").mkdir(exist_ok=True)
+    Path("smokeapp/__init__.py").write_text("")
+    Path("smokeapp/tasks.py").write_text(TASKS)
+    return dict(os.environ, DJANGO_SETTINGS_MODULE="smoke_settings", PYTHONPATH=os.getcwd())
 
 
-# --- transport wiring, exactly as a consumer would do it -------------------------
-
-huey = None
-adapter = None
-processed: list[tuple[int, ...]] = []
-
-
-def dispatch(task_id: str):  # named in DEWEY["DISPATCH"]
-    assert adapter is not None
-    return adapter.dispatch(task_id)
-
-
-def build_transport(*, immediate: bool) -> None:
-    """Wire Huey and register the processor, the way a shared tasks module would."""
-    global huey, adapter
-    from huey import RedisHuey
-
-    from dewey.adapters.huey import HueyAdapter
-    from dewey.django.executor import process_task
-
-    huey = RedisHuey("dewey-smoke", url=REDIS_URL, immediate=immediate, results=False)
-    adapter = HueyAdapter(huey)
-    adapter.register(process_task)
+def wait_for(label: str, condition, seconds: float = 30.0) -> bool:
+    until = time.monotonic() + seconds
+    while time.monotonic() < until:
+        if condition():
+            check(label, True)
+            return True
+        time.sleep(0.1)
+    check(label, False, "(timed out)")
+    return False
 
 
 def main() -> int:
-    global adapter
-
-    print("--> preparing a fresh database")
+    print("--> project and schema")
     recreate_database()
-    configure_django()
+    env = write_project()
+    os.environ.update(env)
+    sys.path.insert(0, os.getcwd())
+    manage = [sys.executable, "-m", "django"]
+    subprocess.run([*manage, "migrate", "--no-input", "-v", "0"], check=True, env=env)
 
-    import json
-    from io import StringIO
+    import django
 
-    from django.core.management import call_command
-    from django.db import transaction
+    django.setup()
+    from django.db import connection, transaction
 
-    print("--> migrate from the shipped migrations")
-    call_command("migrate", verbosity=0)
-    from dewey.django.models import TaskEntry
+    from dewey.django import create_task
+    from dewey.django.models import ScheduleEntry, TaskEntry
 
-    check("migrate created task_entries", TaskEntry.objects.count() == 0)
+    def status(task_id: str) -> str:
+        return TaskEntry.objects.get(id=task_id).status
 
-    import dewey
-    from dewey.contrib.django_huey import dispatch as contrib_dispatch
-    from dewey.dispatcher import Dispatcher
-    from dewey.django.dispatch import DjangoDispatchBackend
-    from dewey.django.executor import create_or_get_task, create_task
-    from dewey.errors import IdempotencyConflictError
-
-    @dewey.task("smoke.notify", max_attempts=3, backoff=dewey.Constant(1))
-    def notify(command_id: int) -> None:
-        processed.append((command_id,))
-
-    @dewey.task("smoke.always_fails", max_attempts=2, backoff=dewey.Constant(1))
-    def always_fails(command_id: int) -> None:
-        raise dewey.TransientError("recipient unavailable")
-
-    backend = DjangoDispatchBackend()
-    dispatcher = Dispatcher(backend, contrib_dispatch, sweep_interval_seconds=None)
-    check(
-        "preferred contrib dispatch is module-level",
-        callable(__import__("dewey.django.conf", fromlist=["get_dispatch_fn"]).get_dispatch_fn()),
-    )
-
-    print("--> producer validation from the installed wheel")
-    before_validation = TaskEntry.objects.count()
-    for producer, kwargs in (
-        (create_task, {}),
-        (create_or_get_task, {"idempotency_key": "smoke-naive-schedule"}),
-    ):
-        try:
-            producer(
-                task_type="smoke.notify",
-                scheduled_for=datetime.now(),
-                **kwargs,
-            )
-        except ValueError as exc:
-            check(
-                f"{producer.__name__} rejects a naive schedule",
-                str(exc) == "scheduled_for must be a timezone-aware datetime",
-                f"message={exc!s}",
-            )
-        else:
-            check(f"{producer.__name__} rejects a naive schedule", False)
-    check(
-        "invalid schedules leave no task row",
-        TaskEntry.objects.count() == before_validation,
-    )
-
-    print("--> happy path: create, dispatch, process, complete")
+    print("--> producing work")
     with transaction.atomic():
-        task = create_task(task_type="smoke.notify", args=[42])
-    dispatched = dispatcher.dispatch_batch()
-    row = TaskEntry.objects.get(id=task.id)
-    check("one task dispatched", dispatched == 1, f"got {dispatched}")
-    check("handler ran with its argument", processed == [(42,)], f"got {processed}")
-    check("row completed", row.status == "completed", f"status={row.status}")
-    check("one attempt recorded", row.attempts == 1, f"attempts={row.attempts}")
-    check("completion timestamped", row.completed_at is not None)
-
-    print("--> duplicate delivery is harmless")
-    processed.clear()
-    contrib_dispatch(task.id)
-    check("handler did not run again", processed == [], f"got {processed}")
-
-    print("--> rolled-back producer leaves nothing to dispatch")
-    before = TaskEntry.objects.count()
+        task = create_task(task_type="smoke.double", kwargs={"value": 21})
+    # The attempt budget is stamped at creation, and a producer does not import handlers.
+    doomed = create_task(task_type="smoke.broken", max_attempts=1)
     try:
         with transaction.atomic():
-            create_task(task_type="smoke.notify", args=[99])
-            raise RuntimeError("business logic failed")
+            create_task(task_type="smoke.double", idempotency_key="rolled-back")
+            raise RuntimeError("producer changed its mind")
     except RuntimeError:
         pass
-    check("no row written", TaskEntry.objects.count() == before)
-    check("nothing to claim", backend.claim(10) == [])
-
-    print("--> broker outage: work waits in Postgres, then dispatches on recovery")
-
-    def broken_dispatch(task_id: str) -> None:
-        raise ConnectionError("redis is unreachable")
-
-    outage_dispatcher = Dispatcher(backend, broken_dispatch, sweep_interval_seconds=None)
-    with transaction.atomic():
-        outage_task = create_task(task_type="smoke.notify", args=[7])
-    outage_dispatcher.dispatch_batch()
-    row = TaskEntry.objects.get(id=outage_task.id)
-    check("survives the outage as pending", row.status == "pending", f"status={row.status}")
-    check("outage did not burn an attempt", row.attempts == 0, f"attempts={row.attempts}")
-
-    processed.clear()
-    recovered = Dispatcher(backend, contrib_dispatch, sweep_interval_seconds=None)
-    check("dispatches after recovery", recovered.dispatch_batch() == 1)
-    check("handler ran once recovered", processed == [(7,)], f"got {processed}")
-
-    print("--> failure path: retry on Dewey's schedule, then dead-letter")
-    with transaction.atomic():
-        failing = create_task(task_type="smoke.always_fails", args=[1])
-    recovered.dispatch_batch()
-    row = TaskEntry.objects.get(id=failing.id)
-    check("first failure retries", row.status == "failed", f"status={row.status}")
-    check("retry is scheduled by Dewey", row.scheduled_for is not None)
-
-    # A due retry is directly claimable; the 60-second recovery sweep is not in
-    # the latency path. Poll like the dispatcher loop, with a generous CI tolerance.
-    retry_started = time.monotonic()
-    retry_dispatched = 0
-    while time.monotonic() - retry_started < 4:
-        retry_dispatched = recovered.dispatch_batch()
-        if retry_dispatched:
-            break
-        time.sleep(0.05)
-    retry_elapsed = time.monotonic() - retry_started
-    check("retry dispatched near its one-second policy", retry_dispatched == 1)
-    check("retry did not wait for recovery sweep", 0.7 <= retry_elapsed < 4)
-    row = TaskEntry.objects.get(id=failing.id)
-    check("dead-letters once the budget is spent", row.status == "dead", f"status={row.status}")
-    check("dead task is queryable with its error", "unavailable" in row.error)
-
-    print("--> expiry and idempotent creation")
-    expired = create_task(
-        task_type="smoke.notify",
-        args=[404],
-        expires_at=datetime.now(UTC) - timedelta(seconds=1),
+    check(
+        "a rolled-back producer leaves no task",
+        not TaskEntry.objects.filter(idempotency_key="rolled-back").exists(),
     )
-    processed.clear()
-    check("expired task is not dispatched", recovered.dispatch_batch() == 0)
-    expired_row = TaskEntry.objects.get(id=expired.id)
-    check("expired task is auditable", expired_row.status == "expired")
-    check("expiry consumes no attempt", expired_row.attempts == 0)
-    first = create_or_get_task(
-        task_type="smoke.notify",
-        idempotency_key="smoke-idempotent-001",
-        args=[55],
-    )
-    same = create_or_get_task(
-        task_type="smoke.notify",
-        idempotency_key="smoke-idempotent-001",
-        args=[55],
-    )
-    check("identical idempotent creation returns one task", first.id == same.id)
+
+    print("--> one worker process, no broker")
+    worker = subprocess.Popen([*manage, "dewey", "run"], env=env)
     try:
-        create_or_get_task(
-            task_type="smoke.notify",
-            idempotency_key="smoke-idempotent-001",
-            args=[56],
+        wait_for("the task completed", lambda: status(task.id) == "completed")
+        wait_for("the failing task dead-lettered", lambda: status(doomed.id) == "dead")
+        wait_for(
+            "the worker applied the declared schedule",
+            lambda: ScheduleEntry.objects.filter(name="smoke.double").exists(),
         )
-    except IdempotencyConflictError as exc:
-        check("conflicting key is typed and redacted", exc.differing_fields == ("args",))
-    else:
-        check("conflicting key is typed and redacted", False)
-    recovered.dispatch_batch()  # drain the one idempotent task before the Redis leg
-
-    print("--> doctor sees a fresh dispatcher heartbeat")
-    backend.heartbeat()
-    doctor_output = StringIO()
-    call_command("dewey_doctor", "--format", "json", stdout=doctor_output)
-    doctor = json.loads(doctor_output.getvalue())
-    check("doctor JSON reports ready", doctor["ok"] is True)
-
-    print("--> real Redis round trip through a Huey consumer")
-    processed.clear()
-    build_transport(immediate=False)
-    assert huey is not None
-    try:
-        huey.storage.flush_queue()
-    except Exception as exc:  # pragma: no cover — surfaced, not swallowed
-        print(f"    FAIL could not reach Redis at {REDIS_ENDPOINT}: {exc}")
-        failures.append("redis reachable")
-    else:
-        real_dispatcher = Dispatcher(backend, dispatch, sweep_interval_seconds=None)
-        with transaction.atomic():
-            queued = create_task(task_type="smoke.notify", args=[123])
-        real_dispatcher.dispatch_batch()
-        check(
-            "task ID is on the Redis queue",
-            huey.storage.queue_size() == 1,
-            f"size={huey.storage.queue_size()}",
-        )
-        check(
-            "row is dispatching until a worker takes it",
-            TaskEntry.objects.get(id=queued.id).status == "dispatching",
+        with connection.cursor() as cursor:  # make the next tick due now
+            cursor.execute(
+                "UPDATE dewey_schedules SET cursor_at = clock_timestamp() - interval '3 min',"
+                " next_due_at = clock_timestamp() - interval '3 min'"
+            )
+        ticks = TaskEntry.objects.filter(idempotency_key__startswith="schedule:smoke.double:")
+        # A minute boundary can add a tick of its own next to the rewound one.
+        finished = {"completed", "expired"}
+        wait_for(
+            "a due tick became a completed task",
+            lambda: (
+                "completed" in (seen := {tick.status for tick in ticks.all()}) and seen <= finished
+            ),
         )
 
-        # Drain the queue the way huey_consumer would.
-        deadline = time.monotonic() + 10
-        while huey.storage.queue_size() and time.monotonic() < deadline:
-            message = huey.dequeue()
-            if message is None:
-                break
-            # Depending on the Huey version, dequeue() hands back a Task or the raw
-            # serialised message.
-            task = message if hasattr(message, "id") else huey.deserialize_task(message)
-            huey.execute(task)
-        row = TaskEntry.objects.get(id=queued.id)
-        check("worker completed it", row.status == "completed", f"status={row.status}")
-        check("handler ran via Redis", processed == [(123,)], f"got {processed}")
+        print("--> the command line")
+        dewey = [str(Path(sys.executable).with_name("dewey")), "--json"]
+        app = ["--app", "dewey.django.worker:create_application"]
+        listed = subprocess.run(
+            [*dewey, *app, "dlq", "list"], env=env, capture_output=True, text=True
+        )
+        letters = json.loads(listed.stdout) if listed.returncode == 0 else []
+        check("dlq list shows the dead letter", [row["id"] for row in letters] == [doomed.id])
+        doctor = subprocess.run(
+            [*manage, "dewey", "--json", "doctor"], env=env, capture_output=True, text=True
+        )
+        check("doctor reports ready", doctor.returncode == 0, doctor.stdout[-500:])
 
-    print()
+        print("--> shutdown")
+        worker.send_signal(signal.SIGTERM)
+        check("SIGTERM drains the worker and it exits 0", worker.wait(timeout=60) == 0)
+    finally:
+        if worker.poll() is None:
+            worker.kill()
+            worker.wait()
+
     if failures:
-        print(f"FAILED: {len(failures)} check(s): {', '.join(failures)}")
+        print(f"\n{len(failures)} check(s) failed: {', '.join(failures)}")
         return 1
-    print("All installed-wheel checks passed.")
+    print("\nAll installed-wheel checks passed.")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

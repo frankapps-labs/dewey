@@ -45,15 +45,6 @@ wheels = [
 ]
 
 [[package]]
-name = "async-timeout"
-version = "5.0.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/a5/ae/136395dfbfe00dfc94da3f3e136d0b13f394cba8f4841120e34226265780/async_timeout-5.0.1.tar.gz", hash = "sha256:d9321a7a3d5a6a5e187e824d2fa0793ce379a202935782d555d6e9d2735677d3", size = 9274, upload-time = "2024-11-06T16:41:39.6Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/fe/ba/e2081de779ca30d473f21f5b30e0e737c438205440784c7dfc81efc2b029/async_timeout-5.0.1-py3-none-any.whl", hash = "sha256:39e3809566ff85354557ec2398b55e096c8364bacac9405a7a1fa429e77fe76c", size = 6233, upload-time = "2024-11-06T16:41:37.9Z" },
-]
-
-[[package]]
 name = "asyncpg"
 version = "0.31.0"
 source = { registry = "https://pypi.org/simple" }
@@ -513,7 +504,7 @@ wheels = [
 
 [[package]]
 name = "dewey"
-version = "0.5.3"
+version = "0.6.0"
 source = { editable = "." }
 
 [package.optional-dependencies]
@@ -522,14 +513,11 @@ async = [
     { name = "sqlalchemy", extra = ["asyncio"] },
 ]
 django = [
-    { name = "django", version = "5.2.17", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py311-django52') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py312-django52') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py311-django52') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py313-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py313-django60' and extra == 'group-5-dewey-compat-py314-django60')" },
-    { name = "django", version = "6.0.8", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django52') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra != 'group-5-dewey-compat-py311-django52') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django52') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py313-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django52') or (python_full_version == '3.12.*' and extra != 'group-5-dewey-compat-py311-django52' and extra != 'group-5-dewey-compat-py312-django52')" },
-]
-huey = [
-    { name = "huey" },
+    { name = "django", version = "5.2.19", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py311-django52') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py312-django52') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py311-django52') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py313-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py313-django60' and extra == 'group-5-dewey-compat-py314-django60')" },
+    { name = "django", version = "6.0.10", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django52') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra != 'group-5-dewey-compat-py311-django52') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django52') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py313-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django52') or (python_full_version == '3.12.*' and extra != 'group-5-dewey-compat-py311-django52' and extra != 'group-5-dewey-compat-py312-django52')" },
 ]
 sqlalchemy = [
-    { name = "sqlalchemy" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
 ]
 
 [package.dev-dependencies]
@@ -546,32 +534,26 @@ build = [
     { name = "wheel" },
 ]
 compat-py311-django52 = [
-    { name = "django", version = "5.2.17", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "huey", marker = "python_full_version < '3.12'" },
+    { name = "django", version = "5.2.19", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
 ]
 compat-py312-django52 = [
-    { name = "django", version = "5.2.17", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.12.*'" },
-    { name = "huey", marker = "python_full_version == '3.12.*'" },
+    { name = "django", version = "5.2.19", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.12.*'" },
 ]
 compat-py312-django60 = [
-    { name = "django", version = "6.0.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.12.*'" },
-    { name = "huey", marker = "python_full_version == '3.12.*'" },
+    { name = "django", version = "6.0.10", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.12.*'" },
 ]
 compat-py313-django60 = [
-    { name = "django", version = "6.0.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.13.*'" },
-    { name = "huey", marker = "python_full_version == '3.13.*'" },
+    { name = "django", version = "6.0.10", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.13.*'" },
 ]
 compat-py314-django60 = [
-    { name = "django", version = "6.0.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.14.*'" },
-    { name = "huey", marker = "python_full_version == '3.14.*'" },
+    { name = "django", version = "6.0.10", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.14.*'" },
 ]
 dev = [
     { name = "aiosqlite" },
     { name = "asyncpg" },
     { name = "basedpyright" },
-    { name = "django", version = "5.2.17", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py311-django52') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py312-django52') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py311-django52') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py313-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py313-django60' and extra == 'group-5-dewey-compat-py314-django60')" },
-    { name = "django", version = "6.0.8", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django52') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra != 'group-5-dewey-compat-py311-django52') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django52') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py313-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django52') or (python_full_version == '3.12.*' and extra != 'group-5-dewey-compat-py311-django52' and extra != 'group-5-dewey-compat-py312-django52')" },
-    { name = "huey" },
+    { name = "django", version = "5.2.19", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py311-django52') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py312-django52') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py311-django52') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py313-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py313-django60' and extra == 'group-5-dewey-compat-py314-django60')" },
+    { name = "django", version = "6.0.10", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django52') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra != 'group-5-dewey-compat-py311-django52') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django52') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py313-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django52') or (python_full_version == '3.12.*' and extra != 'group-5-dewey-compat-py311-django52' and extra != 'group-5-dewey-compat-py312-django52')" },
     { name = "psycopg2-binary" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -588,18 +570,16 @@ release = [
 ]
 wheel-smoke = [
     { name = "psycopg2-binary" },
-    { name = "redis" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "asyncpg", marker = "extra == 'async'", specifier = ">=0.30.0" },
     { name = "django", marker = "extra == 'django'", specifier = ">=5.2.17,<7" },
-    { name = "huey", marker = "extra == 'huey'", specifier = ">=3,<4" },
-    { name = "sqlalchemy", marker = "extra == 'sqlalchemy'", specifier = ">=2.0" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'async'", specifier = ">=2.0" },
+    { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'sqlalchemy'", specifier = ">=2.0" },
 ]
-provides-extras = ["sqlalchemy", "async", "django", "huey"]
+provides-extras = ["sqlalchemy", "async", "django"]
 
 [package.metadata.requires-dev]
 admission = [{ name = "pyyaml", specifier = "==6.0.3" }]
@@ -612,32 +592,16 @@ build = [
     { name = "setuptools", specifier = "==83.0.0" },
     { name = "wheel", specifier = "==0.47.0" },
 ]
-compat-py311-django52 = [
-    { name = "django", marker = "python_full_version == '3.11.*'", specifier = "==5.2.17" },
-    { name = "huey", marker = "python_full_version == '3.11.*'", specifier = "==3.0.0" },
-]
-compat-py312-django52 = [
-    { name = "django", marker = "python_full_version == '3.12.*'", specifier = "==5.2.17" },
-    { name = "huey", marker = "python_full_version == '3.12.*'", specifier = "==3.0.0" },
-]
-compat-py312-django60 = [
-    { name = "django", marker = "python_full_version == '3.12.*'", specifier = "==6.0.8" },
-    { name = "huey", marker = "python_full_version == '3.12.*'", specifier = "==3.0.0" },
-]
-compat-py313-django60 = [
-    { name = "django", marker = "python_full_version == '3.13.*'", specifier = "==6.0.8" },
-    { name = "huey", marker = "python_full_version == '3.13.*'", specifier = "==3.0.0" },
-]
-compat-py314-django60 = [
-    { name = "django", marker = "python_full_version == '3.14.*'", specifier = "==6.0.8" },
-    { name = "huey", marker = "python_full_version == '3.14.*'", specifier = "==3.0.0" },
-]
+compat-py311-django52 = [{ name = "django", marker = "python_full_version == '3.11.*'", specifier = "==5.2.19" }]
+compat-py312-django52 = [{ name = "django", marker = "python_full_version == '3.12.*'", specifier = "==5.2.19" }]
+compat-py312-django60 = [{ name = "django", marker = "python_full_version == '3.12.*'", specifier = "==6.0.10" }]
+compat-py313-django60 = [{ name = "django", marker = "python_full_version == '3.13.*'", specifier = "==6.0.10" }]
+compat-py314-django60 = [{ name = "django", marker = "python_full_version == '3.14.*'", specifier = "==6.0.10" }]
 dev = [
     { name = "aiosqlite", specifier = ">=0.21.0" },
     { name = "asyncpg", specifier = ">=0.30.0" },
     { name = "basedpyright", specifier = ">=1.31.0" },
     { name = "django", specifier = ">=5.2.17,<7" },
-    { name = "huey", specifier = ">=3,<4" },
     { name = "psycopg2-binary", specifier = ">=2.9" },
     { name = "pytest", specifier = ">=7.0" },
     { name = "pytest-asyncio", specifier = ">=0.24.0" },
@@ -652,14 +616,11 @@ release = [
     { name = "twine", specifier = "==7.0.0" },
     { name = "wheel", specifier = "==0.47.0" },
 ]
-wheel-smoke = [
-    { name = "psycopg2-binary", specifier = "==2.9.12" },
-    { name = "redis", specifier = "==8.1.0" },
-]
+wheel-smoke = [{ name = "psycopg2-binary", specifier = "==2.9.12" }]
 
 [[package]]
 name = "django"
-version = "5.2.17"
+version = "5.2.19"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version < '3.12' and extra != 'group-5-dewey-compat-py311-django52' and extra != 'group-5-dewey-compat-py312-django52' and extra != 'group-5-dewey-compat-py312-django60' and extra != 'group-5-dewey-compat-py313-django60' and extra == 'group-5-dewey-compat-py314-django60'",
@@ -675,14 +636,14 @@ dependencies = [
     { name = "sqlparse", marker = "python_full_version < '3.12' or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py311-django52') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py312-django52') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py311-django52') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py313-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py313-django60' and extra == 'group-5-dewey-compat-py314-django60')" },
     { name = "tzdata", marker = "(python_full_version < '3.12' and sys_platform == 'win32') or (python_full_version == '3.12.*' and sys_platform == 'win32' and extra == 'group-5-dewey-compat-py311-django52') or (python_full_version == '3.12.*' and sys_platform == 'win32' and extra == 'group-5-dewey-compat-py312-django52') or (python_full_version >= '3.13' and sys_platform == 'win32' and extra == 'group-5-dewey-compat-py311-django52') or (python_full_version >= '3.13' and extra != 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version >= '3.13' and extra != 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version >= '3.13' and extra != 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra != 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version >= '3.13' and extra != 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra != 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py313-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version == '3.12.*' and extra != 'group-5-dewey-compat-py311-django52' and extra != 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version == '3.12.*' and extra != 'group-5-dewey-compat-py311-django52' and extra != 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version == '3.12.*' and extra != 'group-5-dewey-compat-py311-django52' and extra != 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py313-django60' and extra == 'group-5-dewey-compat-py314-django60') or (sys_platform != 'win32' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django52') or (sys_platform != 'win32' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django60') or (sys_platform != 'win32' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py313-django60') or (sys_platform != 'win32' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py314-django60') or (sys_platform != 'win32' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py312-django60') or (sys_platform != 'win32' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py313-django60') or (sys_platform != 'win32' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py314-django60') or (sys_platform != 'win32' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py313-django60') or (sys_platform != 'win32' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py314-django60') or (sys_platform != 'win32' and extra == 'group-5-dewey-compat-py313-django60' and extra == 'group-5-dewey-compat-py314-django60')" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d5/d8/43e9d000519adceb189620b6869ff88031e046df91c2e9da72f8f6918399/django-5.2.17.tar.gz", hash = "sha256:9d4d93be539a18ab80d058eb515900e10951e04c537c5a6b394fc49528d3251f", size = 10889740, upload-time = "2026-08-04T15:04:03.173Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/02/29/a487a108caa76430c8b616aa90a6d09cf431306112c14093e6f0a7454e17/django-5.2.19.tar.gz", hash = "sha256:ad03d8abc51dbff95ebf34b27123cf0c26a3b62db7ba0cd520783686362533d1", size = 10969285, upload-time = "2026-11-03T15:22:09.468Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/df/f8/ce120525ca78f12b07daf65786679c5d0b54a75285a8958d3ae55e39da35/django-5.2.17-py3-none-any.whl", hash = "sha256:f04fb3b36ee119e1af4fa1d397d5fd6cf12700f49321e84d4f4c642c5b1973db", size = 8315563, upload-time = "2026-08-04T15:03:59.1Z" },
+    { url = "https://files.pythonhosted.org/packages/3c/fb/65b4e897d1268288a46457493d9aec6541be8be08e0093a93cc101c03ab2/django-5.2.19-py3-none-any.whl", hash = "sha256:5965d974a5218a2b68a11dd1276434707f23886525c23f0598eccedaf4f4ca00", size = 8319631, upload-time = "2026-11-03T15:22:03.67Z" },
 ]
 
 [[package]]
 name = "django"
-version = "6.0.8"
+version = "6.0.10"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version == '3.14.*' and extra != 'group-5-dewey-compat-py311-django52' and extra != 'group-5-dewey-compat-py312-django52' and extra != 'group-5-dewey-compat-py312-django60' and extra != 'group-5-dewey-compat-py313-django60' and extra == 'group-5-dewey-compat-py314-django60'",
@@ -699,9 +660,9 @@ dependencies = [
     { name = "sqlparse", marker = "(python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django52') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra != 'group-5-dewey-compat-py311-django52') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django52') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py313-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django52') or (python_full_version == '3.12.*' and extra != 'group-5-dewey-compat-py311-django52' and extra != 'group-5-dewey-compat-py312-django52')" },
     { name = "tzdata", marker = "(python_full_version >= '3.13' and sys_platform == 'win32' and extra != 'group-5-dewey-compat-py311-django52') or (python_full_version == '3.12.*' and sys_platform == 'win32' and extra != 'group-5-dewey-compat-py311-django52' and extra != 'group-5-dewey-compat-py312-django52') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django52') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version < '3.12' and extra == 'group-5-dewey-compat-py313-django60' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django52') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version == '3.12.*' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py314-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django52') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py313-django60') or (python_full_version >= '3.13' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py314-django60') or (sys_platform != 'win32' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django52') or (sys_platform != 'win32' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django60') or (sys_platform != 'win32' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py313-django60') or (sys_platform != 'win32' and extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py314-django60') or (sys_platform != 'win32' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py312-django60') or (sys_platform != 'win32' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py313-django60') or (sys_platform != 'win32' and extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py314-django60') or (sys_platform != 'win32' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py313-django60') or (sys_platform != 'win32' and extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py314-django60') or (sys_platform != 'win32' and extra == 'group-5-dewey-compat-py313-django60' and extra == 'group-5-dewey-compat-py314-django60')" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3c/28/5fee292e588dbdb782582436d1eb62ac8809ec55b98ef27f5b9676a00e9a/django-6.0.8.tar.gz", hash = "sha256:cb0bd962d27fc866f3c514b20aae6a7df56ec80b488f9899da46d675cd051526", size = 10924565, upload-time = "2026-08-04T15:03:39.469Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fb/6a/9dd67bd0d1e3c610faf3d1fab5b233adca77735397807c7e4f438201a140/django-6.0.10.tar.gz", hash = "sha256:6005d030df924f85088454c18bd35dcf082b058aa355ad3df520d8de9aef9f41", size = 11007536, upload-time = "2026-11-03T15:21:49.768Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2e/b4/23e74d261eebfa9c8baed5e8810f09858b9afd613d1037f42ff7aa95c87f/django-6.0.8-py3-none-any.whl", hash = "sha256:9b98b7e1902e0e575ea4f42c175fc9512784f7f2580898286aee3388b322219d", size = 8376956, upload-time = "2026-08-04T15:03:35.138Z" },
+    { url = "https://files.pythonhosted.org/packages/fc/55/ee40b1865bd0ba5fc4e2d747a1a753c1122047137a17b852667287c057a6/django-6.0.10-py3-none-any.whl", hash = "sha256:2a6fe22f319d71fd0ea1e70cded76c6449225cb9903234f8992ee3d21eded5e8", size = 8380913, upload-time = "2026-11-03T15:21:43.691Z" },
 ]
 
 [[package]]
@@ -777,15 +738,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/36/c5/6c2c708e14db3d9caea4b459d8464f58c32047451142fe2cfd90e7458f41/greenlet-3.4.0-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:7f50c804733b43eded05ae694691c9aa68bca7d0a867d67d4a3f514742a2d53f", size = 1622182, upload-time = "2026-04-08T16:26:24.777Z" },
     { url = "https://files.pythonhosted.org/packages/7a/4c/50c5fed19378e11a29fabab1f6be39ea95358f4a0a07e115a51ca93385d8/greenlet-3.4.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:2d4f0635dc4aa638cda4b2f5a07ae9a2cff9280327b581a3fcb6f317b4fbc38a", size = 1685050, upload-time = "2026-04-08T15:57:36.453Z" },
     { url = "https://files.pythonhosted.org/packages/db/72/85ae954d734703ab48e622c59d4ce35d77ce840c265814af9c078cacc7aa/greenlet-3.4.0-cp314-cp314t-win_amd64.whl", hash = "sha256:1a4a48f24681300c640f143ba7c404270e1ebbbcf34331d7104a4ff40f8ea705", size = 245554, upload-time = "2026-04-08T17:03:50.044Z" },
-]
-
-[[package]]
-name = "huey"
-version = "3.0.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/f0/12/45221a95f4b55a4e322cd5bfe23e9067d5c9fda37dde4389dfe8e0ad5574/huey-3.0.0.tar.gz", hash = "sha256:0cfc83617b90132b0d375a3a3726aa7263cd461e7ae12af79b3a94e2630afaf5", size = 252413, upload-time = "2026-04-14T20:04:17.79Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/27/44/6b158ee6a8cbbe646065c53ec1e83bf0982078939f12990eaaf7120a6f8e/huey-3.0.0-py3-none-any.whl", hash = "sha256:b92087253ab6e7c806e9ce3602d6f546eefb7c1b1ee7d1dc5be2b9691d23b28c", size = 85944, upload-time = "2026-04-14T20:04:16.234Z" },
 ]
 
 [[package]]
@@ -1361,18 +1313,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5a/a9/104ec9234c8448c4379768221ea6df01260cd6c2ce13182d4eac531c8342/readme_renderer-44.0.tar.gz", hash = "sha256:8712034eabbfa6805cacf1402b4eeb2a73028f72d1166d6f5cb7f9c047c5d1e1", size = 32056, upload-time = "2024-07-08T15:00:57.805Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e1/67/921ec3024056483db83953ae8e48079ad62b92db7880013ca77632921dd0/readme_renderer-44.0-py3-none-any.whl", hash = "sha256:2fbca89b81a08526aadf1357a8c2ae889ec05fb03f5da67f9769c9a592166151", size = 13310, upload-time = "2024-07-08T15:00:56.577Z" },
-]
-
-[[package]]
-name = "redis"
-version = "8.1.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "async-timeout", marker = "python_full_version < '3.11.3' or (extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django52') or (extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py312-django60') or (extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py313-django60') or (extra == 'group-5-dewey-compat-py311-django52' and extra == 'group-5-dewey-compat-py314-django60') or (extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py312-django60') or (extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py313-django60') or (extra == 'group-5-dewey-compat-py312-django52' and extra == 'group-5-dewey-compat-py314-django60') or (extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py313-django60') or (extra == 'group-5-dewey-compat-py312-django60' and extra == 'group-5-dewey-compat-py314-django60') or (extra == 'group-5-dewey-compat-py313-django60' and extra == 'group-5-dewey-compat-py314-django60')" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/a8/99/604f0b666d4c616d891cf77ebb9db6bb21601344c051aebf1b72b9ff915f/redis-8.1.0.tar.gz", hash = "sha256:6e1a19beef9225c83efd689c7e6b7da2d5215b1f42cd13b7fc3714d0a09c7b25", size = 5254356, upload-time = "2026-07-30T08:51:00.269Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/66/9d/c5731f6e3608663d4d3656fd8d3aecee8b509c3082818f5a13eae925baea/redis-8.1.0-py3-none-any.whl", hash = "sha256:a4fe1aac3d3b3cc791d4b3d5931c5a956045dc951ee74d1c913ee3ac4d2ee9fb", size = 560618, upload-time = "2026-07-30T08:50:58.497Z" },
 ]
 
 [[package]]

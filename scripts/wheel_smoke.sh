@@ -5,14 +5,12 @@
 # This is the test that catches packaging mistakes no in-repo test can see — a module
 # missing from the wheel, migrations not shipped, an extra that does not resolve.
 #
-# Requires Postgres (and Redis, for the Huey leg). With `make wheel-smoke` the compose
-# containers provide both.
+# Requires Postgres. With `make wheel-smoke` the compose container provides it.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK_DIR="$(mktemp -d)"
 DB_URL="${DEWEY_TEST_DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/dewey_test}"
-REDIS_URL="${DEWEY_TEST_REDIS_URL:-redis://localhost:6379/0}"
 SMOKE_DB="${DEWEY_SMOKE_DATABASE:-dewey_wheel_smoke}"
 
 cleanup() { rm -rf "$WORK_DIR"; }
@@ -27,7 +25,7 @@ echo "==> Wheel under test: $(basename "$WHEEL")"
 
 echo "==> Creating a hash-locked environment (no access to the source tree)"
 "$REPO_ROOT/scripts/sync_admitted_env.sh" "$WORK_DIR/venv" "$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" \
-  extra:sqlalchemy extra:async extra:django extra:huey group:wheel-smoke >/dev/null
+  extra:sqlalchemy extra:async extra:django group:wheel-smoke >/dev/null
 VENV_PY="$WORK_DIR/venv/bin/python"
 
 echo "==> Installing only the local wheel; dependencies are already admitted"
@@ -61,17 +59,14 @@ import importlib
 
 for module in [
     "dewey",
-    "dewey.policy",
-    "dewey.errors",
-    "dewey.serialization",
-    "dewey.dispatcher",
-    "dewey.listen_sync",
-    "dewey.core.states",
-    "dewey.core.execution",
-    "dewey.adapters",
-    "dewey.adapters.huey",
+    "dewey.cli",
+    "dewey.ops",
+    "dewey.scheduling",
+    "dewey.worker",
+    "dewey.core.cron",
     "dewey.sqlalchemy",
-    "dewey.sqlalchemy.dispatch",
+    "dewey.sqlalchemy.ops",
+    "dewey.sqlalchemy.schedules",
     "dewey.django",
 ]:
     importlib.import_module(module)
@@ -83,14 +78,13 @@ echo "==> Confirming migrations shipped inside the wheel"
 from importlib import resources
 
 files = {path.name for path in resources.files("dewey.django.migrations").iterdir()}
-expected = {"0001_initial.py", "0002_task_expiry_and_dispatcher_heartbeat.py"}
+expected = {"0001_initial.py", "0008_native_only.py", "0009_schedules.py"}
 assert expected <= files, f"migrations missing from the wheel: {sorted(files)}"
 for name in sorted(expected):
     print(f"    ok dewey.django.migrations/{name}")
 PY
 
-echo "==> Running the end-to-end scenario (Django migrate, dispatcher, Huey worker)"
-DEWEY_SMOKE_DB_URL="$DB_URL" DEWEY_SMOKE_REDIS_URL="$REDIS_URL" DEWEY_SMOKE_DB_NAME="$SMOKE_DB" \
-  "$VENV_PY" wheel_smoke.py
+echo "==> Running the end-to-end scenario (Django migrate, one worker, schedules, CLI)"
+DEWEY_SMOKE_DB_URL="$DB_URL" DEWEY_SMOKE_DB_NAME="$SMOKE_DB" "$VENV_PY" wheel_smoke.py
 
 echo "==> Installed-wheel smoke passed"

@@ -41,6 +41,8 @@ class TaskEntry:
     #: Audit timestamp: when Dewey observed the deadline had passed. The status
     #: EXPIRED is the reason; this records the moment.
     expired_at: datetime | None = None
+    #: Per-attempt native execution budget, bounded by the runner's server ceiling.
+    execution_timeout_s: float | None = None
 
     @property
     def is_terminal(self) -> bool:

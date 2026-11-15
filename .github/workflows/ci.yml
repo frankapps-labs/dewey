@@ -19,7 +19,6 @@ env:
   # cannot be proven against SQLite or mocks.
   DEWEY_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/dewey_test
   DEWEY_TEST_DATABASE_URL_ASYNC: postgresql+asyncpg://postgres:postgres@localhost:5432/dewey_test
-  DEWEY_TEST_REDIS_URL: redis://localhost:6379/0
 
 jobs:
   checks:
@@ -61,31 +60,25 @@ jobs:
         include:
           # One intentional lane per supported Python version, plus a Python 3.12
           # Django 5.2 lane guarding the oldest-Django/newer-Python resolver seam.
-          # Every lane upgrades within Huey 3.x, so CI tracks its latest release.
           - python-version: "3.11"
             compatibility-group: "compat-py311-django52"
-            expected-django: "5.2.17"
-            expected-huey: "3.0.0"
+            expected-django: "5.2.19"
             upload-coverage: false
           - python-version: "3.12"
             compatibility-group: "compat-py312-django52"
-            expected-django: "5.2.17"
-            expected-huey: "3.0.0"
+            expected-django: "5.2.19"
             upload-coverage: false
           - python-version: "3.12"
             compatibility-group: "compat-py312-django60"
-            expected-django: "6.0.8"
-            expected-huey: "3.0.0"
+            expected-django: "6.0.10"
             upload-coverage: true
           - python-version: "3.13"
             compatibility-group: "compat-py313-django60"
-            expected-django: "6.0.8"
-            expected-huey: "3.0.0"
+            expected-django: "6.0.10"
             upload-coverage: false
           - python-version: "3.14"
             compatibility-group: "compat-py314-django60"
-            expected-django: "6.0.8"
-            expected-huey: "3.0.0"
+            expected-django: "6.0.10"
             upload-coverage: false
 
     services:
@@ -99,15 +92,6 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      redis:
-        image: redis:7
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -136,8 +120,7 @@ jobs:
           from importlib.metadata import version
 
           assert version("Django") == "${{ matrix.expected-django }}"
-          assert version("huey") == "${{ matrix.expected-huey }}"
-          print("Django", version("Django"), "Huey", version("huey"))
+          print("Django", version("Django"))
           PY
 
       - name: Run tests
@@ -174,15 +157,6 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      redis:
-        image: redis:7
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5

@@ -8,7 +8,7 @@ help:
 	@echo "Setup:"
 	@echo "  make install       Install with dev dependencies (uv sync)"
 	@echo ""
-	@echo "Infrastructure (Postgres + Redis for the test suite):"
+	@echo "Infrastructure (Postgres for the test suite):"
 	@echo "  make up            Start containers and wait until healthy"
 	@echo "  make down          Stop containers and drop their volumes"
 	@echo ""
@@ -34,10 +34,9 @@ help:
 install:
 	uv sync --all-extras
 
-# Compose ports are offset so they cannot collide with a local Postgres/Redis.
+# Compose ports are offset so they cannot collide with a local Postgres.
 COMPOSE_DB := postgresql://postgres:postgres@localhost:55440/dewey_test
 COMPOSE_DB_ASYNC := postgresql+asyncpg://postgres:postgres@localhost:55440/dewey_test
-COMPOSE_REDIS := redis://localhost:56390/0
 
 up:
 	docker compose up -d --wait
@@ -51,13 +50,11 @@ test:
 test-integration: up
 	DEWEY_TEST_DATABASE_URL=$(COMPOSE_DB) \
 	DEWEY_TEST_DATABASE_URL_ASYNC=$(COMPOSE_DB_ASYNC) \
-	DEWEY_TEST_REDIS_URL=$(COMPOSE_REDIS) \
 	PGHOST=localhost PGPORT=55440 \
 	uv run pytest
 
 wheel-smoke: build
 	DEWEY_TEST_DATABASE_URL=$(COMPOSE_DB) \
-	DEWEY_TEST_REDIS_URL=$(COMPOSE_REDIS) \
 	./scripts/wheel_smoke.sh
 
 optional-import-matrix: build
