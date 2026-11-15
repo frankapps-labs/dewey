@@ -214,7 +214,7 @@ def test_a_worker_of_each_kind_runs_tasks_ticks_and_alerts(engine, tmp_path, mod
         DEWEY_CLI_TEST_ALERTS=str(alerts),
         DEWEY_CLI_TEST_TICK_MARKER=str(tick_marker),
         DEWEY_CLI_TEST_BACKEND=mode,
-        PYTHONPATH=os.pathsep.join([str(tmp_path), str(ROOT)]),
+        PYTHONPATH=os.pathsep.join([str(tmp_path), str(ROOT / "src"), str(ROOT)]),
     )
     if mode == "django":  # settings-driven: no factory, handlers found by autodiscovery
         (tmp_path / "worker_settings.py").write_text(

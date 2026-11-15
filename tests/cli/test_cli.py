@@ -253,6 +253,9 @@ def test_one_worker_process_runs_tasks_ticks_and_alerts(engine, tmp_path, capsys
         DEWEY_CLI_TEST_ALERTS=str(alerts),
         DEWEY_CLI_TEST_TICK_MARKER=str(tick_marker),
         DEWEY_APP=cli_app.APP,
+        # The worker is another process: it needs the source tree whether or not
+        # the package is installed in this environment.
+        PYTHONPATH=os.pathsep.join([str(ROOT / "src"), str(ROOT)]),
     )
     done = create(engine, kwargs={"marker": str(marker)})
     doomed = create(engine, task_type="cli.fail")

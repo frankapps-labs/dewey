@@ -1,8 +1,10 @@
 """Transport consumers need only public runner types, including across pickle/spawn."""
 
+import os
 import pickle
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -31,6 +33,7 @@ def test_importing_public_runner_does_not_load_private_worker_runtime():
         check=True,
         capture_output=True,
         text=True,
+        env=dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[2] / "src")),
     )
     assert result.stdout.strip() == "1"
 
