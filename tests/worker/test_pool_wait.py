@@ -393,7 +393,7 @@ def test_real_busy_wait_expires_without_polling_task_timeout(live_pool):
 
 def test_service_uses_pool_wait_and_caps_it_at_drain_deadline(monkeypatch):
     now = [100.0]
-    waits, handlers = [], {}
+    waits, handlers, stops = [], {}, []
     config = SimpleNamespace(
         concurrency=1,
         startup_seconds=5,
@@ -401,6 +401,9 @@ def test_service_uses_pool_wait_and_caps_it_at_drain_deadline(monkeypatch):
         shutdown_seconds=0.05,
         auto_apply_schedules=False,
         alert_hook=None,
+        start_method="spawn",
+        tracing=False,
+        failure_details="type",
         timing=SimpleNamespace(
             task_timeout_seconds=5, termination_seconds=1, poll_interval_seconds=0.1
         ),
@@ -416,6 +419,9 @@ def test_service_uses_pool_wait_and_caps_it_at_drain_deadline(monkeypatch):
             waits.append(seconds)
             if len(waits) == 1:
                 handlers[signal.SIGTERM](signal.SIGTERM, None)
+
+        def stop_starting(self):
+            stops.append(True)
 
     class Runner:
         def __init__(self, *args, **kwargs):
@@ -448,3 +454,4 @@ def test_service_uses_pool_wait_and_caps_it_at_drain_deadline(monkeypatch):
     monkeypatch.setattr(os, "close", lambda *args: None)
     assert _process.service() == 0
     assert waits == [0.1, 0.0]
+    assert stops == [True]  # the drain starts no further children, once

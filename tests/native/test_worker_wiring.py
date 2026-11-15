@@ -58,6 +58,8 @@ def parent(store):
             capacity=0,
             task_timeout_seconds=TIMING.task_timeout_seconds,
             termination_timeout_seconds=0.2,
+            start_method="spawn",
+            prepare=None,
             start=lambda: None,
             poll=lambda: [],
             shutdown=lambda **kwargs: None,

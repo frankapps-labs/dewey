@@ -10,6 +10,7 @@ from dewey.scheduling import (
     CATCH_UP_LIMIT,
     SCAN_LIMIT,
     DuplicateScheduleError,
+    Tick,
     definition_hash,
     plan_ticks,
     tick_key,
@@ -242,6 +243,22 @@ class TestDefinitionHash:
             "polls",
             8,
             3,
+        )
+        assert "execution_timeout_s" not in definition  # unset: the hash stays as it was
+
+    def test_the_tasks_time_limit_is_part_of_the_definition_when_set(self):
+        dewey.task("inventory.poll", execution_timeout_s=90)(lambda: None)
+        definition = dewey.schedule("poll", **self.base).definition()
+        assert definition["execution_timeout_s"] == 90
+        fields = Tick(datetime(2026, 1, 1, tzinfo=UTC), None).task_fields("poll", definition)
+        assert fields["execution_timeout_s"] == 90
+        unlimited = dict(definition)
+        del unlimited["execution_timeout_s"]  # applied by a release before the field
+        assert (
+            Tick(datetime(2026, 1, 1, tzinfo=UTC), None).task_fields("poll", unlimited)[
+                "execution_timeout_s"
+            ]
+            is None
         )
 
 

@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dewey"
-version = "0.6.0"
+version = "0.7.0"
 description = "Guaranteed task delivery for Python on Postgres: durable tasks, schedules and a worker, no broker."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -48,6 +48,11 @@ async = [
 ]
 django = [
     "Django>=5.2.17,<7",
+]
+otel = [
+    # The worker opens one span per attempt through the API only; the application
+    # brings the SDK or vendor distribution (Logfire, Sentry) that exports them.
+    "opentelemetry-api>=1.20",
 ]
 
 [dependency-groups]
@@ -103,6 +108,8 @@ dev = [
     "Django>=5.2.17,<7",
     "psycopg2-binary>=2.9",
     "PyYAML==6.0.3",
+    # The tracing tests export spans through the SDK's in-memory exporter.
+    "opentelemetry-sdk>=1.20",
 ]
 
 [project.urls]

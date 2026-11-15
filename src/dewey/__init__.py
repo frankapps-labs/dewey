@@ -16,7 +16,7 @@ Importing ``dewey`` pulls in no framework: the producer and worker APIs live in
 from importlib.metadata import PackageNotFoundError, version
 
 from dewey.alerts import on_alert
-from dewey.context import TaskContext, current_task
+from dewey.context import TaskContext, current_task, current_task_or_none
 from dewey.core.cron import cron, every
 from dewey.core.states import TaskStatus
 from dewey.errors import (
@@ -74,6 +74,7 @@ __all__ = [
     "configure_policies",
     "cron",
     "current_task",
+    "current_task_or_none",
     "encode_args",
     "encode_kwargs",
     "every",

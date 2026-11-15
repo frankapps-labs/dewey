@@ -86,9 +86,15 @@ or by path, in the worker settings (`alert_hook="myapp.alerts:notify"`, Django:
 | `worker_heartbeat_stale` | `message` | `dewey doctor` found no running worker for a queue. Run doctor from a monitor to get this one. |
 
 The hook runs in the process that made the change, after the transaction commits, so
-an alert never describes something that was rolled back. Keep it quick. If it raises,
-the exception is logged and nothing else happens: an alert cannot change what the
-ledger did. There is no vendor code in Dewey; the hook is yours.
+an alert never describes something that was rolled back, and after the
+[failed-attempt log record](logging.md#failed-attempts) for the same change has gone
+out. Keep it quick. If it raises, the exception is logged and nothing else happens: an
+alert cannot change what the ledger did. It runs in a copy of the current context:
+it sees the task's trace and current span (an error tracker or `logfire.error` call
+inside it lands under the attempt), and anything it attaches to that context, a
+span it forgets to end or an instrumentation-suppression flag, ends with the call
+instead of silencing the worker's own records. There is no vendor code in Dewey;
+the hook is yours.
 
 ## The operations API
 

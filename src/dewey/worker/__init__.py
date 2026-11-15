@@ -65,6 +65,18 @@ class WorkerConfig:
     auto_apply_schedules: bool = False
     #: ``module:function`` called with alert dicts — see ``dewey.alerts``.
     alert_hook: str | None = None
+    #: How the service and its task processes are created. ``spawn`` imports the
+    #: application once per process; ``fork`` imports it once and forks, so the
+    #: processes share it. Fork needs a fork-safe application: see the worker docs.
+    start_method: Literal["spawn", "fork"] = "spawn"
+    #: Open an OpenTelemetry span per attempt in the task processes. Needs
+    #: ``opentelemetry-api`` (``dewey[otel]``); the application configures the
+    #: SDK or vendor that exports them. See ``dewey.core.tracing``.
+    tracing: bool = False
+    #: What a failed attempt's log record says about the handler's exception:
+    #: ``type`` (its class only) or ``full`` (message and traceback as well, for
+    #: a log pipeline that scrubs). See ``dewey.core.execution.configure_failure_details``.
+    failure_details: Literal["type", "full"] = "type"
 
     def __post_init__(self) -> None:
         if not isinstance(self.factory, str) or self.factory.count(":") != 1:
@@ -102,6 +114,12 @@ class WorkerConfig:
             not isinstance(self.alert_hook, str) or self.alert_hook.count(":") != 1
         ):
             raise ValueError("alert_hook must be module:function")
+        if self.start_method not in ("spawn", "fork"):
+            raise ValueError("start_method must be spawn or fork")
+        if not isinstance(self.tracing, bool):
+            raise ValueError("tracing must be true or false")
+        if self.failure_details not in ("type", "full"):
+            raise ValueError("failure_details must be type or full")
         if self.timing is None:
             object.__setattr__(self, "timing", default_timing(self.concurrency))
         if not isinstance(self.timing, WorkerTiming):

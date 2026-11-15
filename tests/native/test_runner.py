@@ -1,5 +1,6 @@
 """Actual dispatch → spawned handler → durable outcome → crash recovery."""
 
+import importlib
 import json
 import multiprocessing
 import time
@@ -8,9 +9,11 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import update
 
+import dewey
 from dewey._worker.pool import WorkerPool
 from dewey._worker.runner import NativeRunner
 from dewey.sqlalchemy.models import TaskEntryModel as Task
+from tests._helpers import native_runtime
 from tests._helpers.native_runtime import TIMING
 from tests.native.test_storage import create, expire_lease, snapshot
 
@@ -20,7 +23,7 @@ class StorageBridge:
         self.call = call
 
 
-def runner_for(store, monkeypatch):
+def runner_for(store, monkeypatch, start_method="spawn"):
     # The storage fixture exposes only a callable. Capture owner/mode through its
     # explicit fixture attributes, not inherited engines or session objects.
     monkeypatch.setenv("DEWEY_NATIVE_TEST_MODE", store.mode)
@@ -30,7 +33,12 @@ def runner_for(store, monkeypatch):
         concurrency=2,
         task_timeout_seconds=TIMING.task_timeout_seconds,
         termination_timeout_seconds=0.2,
+        start_method=start_method,
     )
+    if start_method == "fork":
+        return NativeRunner(
+            pool, StorageBridge(store), timing=TIMING, close_resources=store.close_resources
+        )
     return NativeRunner(pool, StorageBridge(store), timing=TIMING)
 
 
@@ -202,3 +210,64 @@ def test_a_task_that_finishes_as_leases_are_renewed_keeps_its_process(
         assert set(runner.pool.worker_pids) == pids
     finally:
         runner.close()
+
+
+def test_forked_task_processes_do_not_inherit_the_parent_connection(
+    store, engine, tmp_path, monkeypatch
+):
+    """With start_method=fork the parent releases its connections before each fork,
+    so a task process talks to its own Postgres backend and the parent carries on."""
+    # A forked task process runs the handlers its parent imported: this process.
+    # Another test's fixture may have cleared the registry since the import.
+    if "native.synthetic.sync" not in dewey.registry.task_types():
+        importlib.reload(native_runtime)
+    if store.mode == "django":
+        from django.db import connections
+
+        monkeypatch.setenv("DEWEY_NATIVE_TEST_ALIAS", "native")  # the parent's alias
+        with connections["native"].cursor() as cursor:
+            cursor.execute("SELECT pg_backend_pid()")
+            parent_backend = cursor.fetchone()[0]
+        assert connections["native"].connection is not None  # open when the fork happens
+        effect = tmp_path / "backend-pid"
+        task_id = create(engine, task_type="native.synthetic.backend_pid", args=[str(effect)])
+    else:
+        parent_backend = None
+        effect = tmp_path / "effect"
+        task_id = create(engine, task_type="native.synthetic.sync", args=[str(effect)])
+    runner = runner_for(store, monkeypatch, start_method="fork")
+    try:
+        runner.start()
+        row = drive(runner, engine, task_id, "completed")
+        assert row["attempts"] == 1 and effect.exists()
+        if parent_backend is not None:
+            assert int(effect.read_text()) != parent_backend
+        assert store("heartbeat") is None  # the parent's own storage still works
+    finally:
+        runner.close()
+
+
+def test_fork_without_a_cleanup_hook_is_refused(store):
+    """A forked task process would inherit the parent's connections."""
+    pool = WorkerPool(
+        "tests._helpers.native_runtime:create_runtime",
+        concurrency=1,
+        task_timeout_seconds=TIMING.task_timeout_seconds,
+        termination_timeout_seconds=0.2,
+        start_method="fork",
+    )
+    with pytest.raises(ValueError, match="close_resources"):
+        NativeRunner(pool, StorageBridge(store), timing=TIMING)
+
+
+def test_the_runner_does_not_replace_a_prepare_hook_the_pool_already_has(store):
+    pool = WorkerPool(
+        "tests._helpers.native_runtime:create_runtime",
+        concurrency=1,
+        task_timeout_seconds=TIMING.task_timeout_seconds,
+        termination_timeout_seconds=0.2,
+        start_method="fork",
+        prepare=lambda: None,
+    )
+    with pytest.raises(ValueError, match="prepare hook"):
+        NativeRunner(pool, StorageBridge(store), timing=TIMING, close_resources=lambda: None)

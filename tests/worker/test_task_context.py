@@ -136,3 +136,11 @@ def test_native_runtime_context_tracks_each_admitted_attempt(
     assert len(storage.finishes) == (0 if handler_style == "abort" else 2)
     if handler_style == "error":
         assert all(isinstance(failure, ValueError) for failure in storage.finishes)
+
+
+def test_current_task_or_none_follows_the_bound_identity():
+    assert dewey.current_task_or_none() is None
+    context = TaskContext("synthetic-task-a", "synthetic.effect", 1)
+    with _bind_task(context):
+        assert dewey.current_task_or_none() is context
+    assert dewey.current_task_or_none() is None

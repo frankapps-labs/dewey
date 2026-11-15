@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
+import dewey
 from dewey.errors import IdempotencyConflictError
 from dewey.runner import FailureReport, RunnerAssignment, RunnerPolicy, RunnerTiming
 from dewey.sqlalchemy.models import TaskEntryModel as Task
@@ -65,6 +66,44 @@ def test_claim_stamps_row_budget_bounded_by_server_ceiling(
     invocation = runner("start", assignment, custom_policy=policy)
     assert invocation["execution_timeout_s"] == budget
     assert invocation["execution_deadline_at"] == row["execution_deadline_at"]
+
+
+class TestPolicyBudget:
+    """The task type's limit is stamped at creation like max_attempts."""
+
+    @pytest.fixture(autouse=True)
+    def policies(self):
+        dewey.task("native.synthetic", execution_timeout_s=90)(lambda: None)
+        yield
+        dewey.registry.clear()
+        dewey.clear_project_policies()
+
+    def test_the_policy_limit_is_stamped_unless_the_creator_sets_one(self, producer, engine):
+        assert snapshot(engine, producer())["execution_timeout_s"] == 90
+        assert snapshot(engine, producer(execution_timeout_s=15))["execution_timeout_s"] == 15
+        dewey.configure_policies({"native.synthetic": {"execution_timeout_s": 120}})
+        assert snapshot(engine, producer())["execution_timeout_s"] == 120
+        dewey.configure_policies({"native.synthetic": {"execution_timeout_s": None}})
+        assert snapshot(engine, producer())["execution_timeout_s"] is None
+
+    def test_the_stamped_limit_bounds_the_attempt(self, runner, producer, engine):
+        task_id = producer()
+        policy = RunnerPolicy(
+            runner.policy.owner, ["default"], RunnerTiming(30, 30, 2, 1, 0.1, 1, 60)
+        )
+        runner("claim", custom_policy=policy)
+        row = snapshot(engine, task_id)
+        assert (row["execution_deadline_at"] - row["dispatching_at"]).total_seconds() == 60
+
+    def test_the_idempotent_contract_compares_the_resolved_limit(self, producer, engine):
+        task_id = producer(idempotency_key="synthetic-policy-budget")
+        assert snapshot(engine, task_id)["execution_timeout_s"] == 90
+        assert producer(idempotency_key="synthetic-policy-budget") == task_id
+        assert (
+            producer(execution_timeout_s=90, idempotency_key="synthetic-policy-budget") == task_id
+        )
+        with pytest.raises(IdempotencyConflictError):
+            producer(execution_timeout_s=15, idempotency_key="synthetic-policy-budget")
 
 
 @pytest.mark.parametrize("budget", [0, -1, float("inf"), float("-inf"), float("nan"), True, "60"])

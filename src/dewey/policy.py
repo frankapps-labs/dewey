@@ -24,6 +24,7 @@ from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from typing import Any, Protocol, runtime_checkable
 
+from dewey.core.validation import require_execution_timeout
 from dewey.errors import DuplicateTaskTypeError, NonRetryableError
 
 logger = logging.getLogger(__name__)
@@ -114,6 +115,7 @@ POLICY_FIELDS = frozenset(
         "backoff",
         "retry_on",
         "fail_fast_on",
+        "execution_timeout_s",
         "statement_timeout_s",
         "lock_timeout_s",
     }
@@ -145,6 +147,12 @@ class TaskPolicy:
     retry_on: tuple[type[BaseException], ...] = ()
     #: Exceptions that dead-letter immediately, ignoring remaining attempts.
     fail_fast_on: tuple[type[BaseException], ...] = (NonRetryableError,)
+
+    #: Hard time limit for one attempt, in seconds, stamped onto the row at
+    #: creation like ``max_attempts`` (``create_task(execution_timeout_s=...)``
+    #: overrides it per task). None leaves the worker's ``task_timeout_seconds``
+    #: as the limit; the worker bounds a larger value by that ceiling at claim time.
+    execution_timeout_s: float | None = None
 
     # Database budgets for the handler's own queries; None leaves the connection
     # as the application configured it. See ``TaskContext.statement_timeout_s``.
@@ -184,6 +192,11 @@ def _validate(task_type: str, overrides: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(
                 f"max_attempts for task {task_type!r} must be an int >= 1, got {value!r}"
             )
+    if "execution_timeout_s" in overrides:
+        try:
+            require_execution_timeout(overrides["execution_timeout_s"])
+        except ValueError as exc:
+            raise ValueError(f"execution_timeout_s for task {task_type!r}: {exc}") from None
     for key in ("statement_timeout_s", "lock_timeout_s"):
         value = overrides.get(key)
         if value is not None and (

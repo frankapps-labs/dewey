@@ -154,10 +154,28 @@ class TestSettings:
                 "factory": FACTORY,
                 "queues": ("default", "reports"),
                 "concurrency": 4,
-                "auto_apply_schedules": False,
                 "alert_hook": "ops.alerts:page",
                 "timing": {"task_timeout_seconds": 600},
             }
+
+    def test_only_configured_keys_are_forwarded_so_defaults_cannot_drift(self):
+        from dataclasses import fields
+
+        from dewey.django.conf import DEFAULTS, WORKER_SETTINGS
+        from dewey.worker import WorkerConfig
+
+        with override_settings(DEWEY={}):
+            assert worker_settings() == {"factory": FACTORY}  # the worker's defaults apply
+        with override_settings(DEWEY={"START_METHOD": "fork", "STARTUP_SECONDS": 90}):
+            assert worker_settings() == {
+                "factory": FACTORY,
+                "start_method": "fork",
+                "startup_seconds": 90,
+            }
+        worker_defaults = {field.name: field.default for field in fields(WorkerConfig)}
+        for key, name in WORKER_SETTINGS.items():
+            if name != "timing":
+                assert DEFAULTS[key] == worker_defaults[name], key
 
     def test_defaults_and_unknown_keys(self):
         assert get_settings()["AUTODISCOVER"] == "tasks"

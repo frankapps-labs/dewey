@@ -7,6 +7,7 @@ lives here so the three paths cannot drift apart.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -16,6 +17,28 @@ from dewey.core.backoff import BackoffFn
 from dewey.core.states import TaskStatus, should_die
 from dewey.errors import RetryAfter, UnknownTaskTypeError
 from dewey.policy import TaskPolicy, resolve_policy
+
+FAILURE_DETAILS = ("type", "full")
+_failure_details = "type"
+
+
+def configure_failure_details(level: str) -> None:
+    """How much of a handler's exception the failed-attempt log record carries.
+
+    ``"type"`` (the default) names the exception class only, with no message
+    and no traceback: an exception's text may quote handler input or SQL
+    parameters, and the log pipeline is not the ledger's ``--reveal`` boundary.
+    ``"full"`` adds the message and ``exc_info``, for an application whose log
+    pipeline scrubs what it collects. The row's stored error is not affected.
+    """
+    if level not in FAILURE_DETAILS:
+        raise ValueError("failure_details must be type or full")
+    global _failure_details
+    _failure_details = level
+
+
+def failure_details() -> str:
+    return _failure_details
 
 
 @dataclass(frozen=True)
@@ -99,4 +122,88 @@ def resolve_handler(
     return policy.handler
 
 
-__all__ = ["FailureOutcome", "classify_failure", "resolve_handler"]
+def log_outcome(
+    log: logging.Logger,
+    *,
+    task_id: str,
+    task_type: str,
+    queue: str,
+    attempt: int,
+    max_attempts: int,
+    status: TaskStatus | str,
+    reason: str,
+    retry_at: datetime | None = None,
+    exc: BaseException | None = None,
+) -> None:
+    """One log record per failed attempt, the same from every executor and the worker.
+
+    A failed attempt that will be retried is a WARNING; the one that leaves the
+    task dead is an ERROR. The record names the exception's type, and with
+    ``failure_details="full"`` also carries its message and ``exc_info``, when
+    the process that logs it is the one that caught it; and the task's identity
+    as structured fields (``task_id``, ``task_type``, ``queue``, ``attempt``,
+    ``max_attempts``, ``outcome``, ``reason``) so a JSON or OpenTelemetry log
+    handler can index and count them.
+
+    Every value on the record (its arguments and its fields) is a string, a
+    number or None. A JSON handler serialises the arguments too, and one that
+    meets an object it has no encoder for may go looking for one: Logfire
+    imports every optional library it knows (pandas, numpy, ...) to find a
+    match, which takes tens of seconds on a small CPU. The exception travels as
+    ``exc_info`` only; its text is in the message.
+    """
+    status = TaskStatus(status)
+    if exc is None:
+        error = ""
+    elif _failure_details == "full":
+        error = f"{type(exc).__name__}: {exc}"
+    else:
+        error = type(exc).__name__
+        exc = None  # the message and traceback stay out of the log pipeline
+    fields = {
+        "task_id": task_id,
+        "task_type": task_type,
+        "queue": queue,
+        "attempt": attempt,
+        "max_attempts": max_attempts,
+        "outcome": status.value,
+        "reason": reason,
+    }
+    if status == TaskStatus.DEAD:
+        log.error(
+            "Task dead id=%s type=%s queue=%s attempt=%d/%d reason=%s error=%s",
+            task_id,
+            task_type,
+            queue,
+            attempt,
+            max_attempts,
+            reason,
+            error,
+            exc_info=exc,
+            extra=fields,
+        )
+    else:
+        log.warning(
+            "Task failed id=%s type=%s queue=%s attempt=%d/%d reason=%s retry_at=%s error=%s",
+            task_id,
+            task_type,
+            queue,
+            attempt,
+            max_attempts,
+            reason,
+            None if retry_at is None else retry_at.isoformat(),
+            error,
+            exc_info=exc,
+            extra={**fields, "retry_at": None if retry_at is None else retry_at.isoformat()},
+        )
+
+
+__all__ = [
+    "FAILURE_DETAILS",
+    "FailureOutcome",
+    "classify_failure",
+    "configure_failure_details",
+    "failure_details",
+    "log_outcome",
+    "resolve_handler",
+]

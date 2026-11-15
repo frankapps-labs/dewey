@@ -3,6 +3,7 @@
 import asyncio
 import inspect
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -27,6 +28,51 @@ async def async_effect(path):
 @dewey.task("native.synthetic.crash")
 def crash():
     os._exit(23)
+
+
+@dewey.task("native.synthetic.fail", backoff=dewey.Constant(3600))
+def fail():
+    raise ValueError("synthetic handler failure")
+
+
+class _JsonLines(logging.Formatter):
+    """What a JSON log handler would ship: level, message, exception and the fields."""
+
+    def format(self, record):
+        return json.dumps(
+            {
+                "level": record.levelname,
+                "message": record.getMessage(),
+                "exception": self.formatException(record.exc_info) if record.exc_info else None,
+                "pid": os.getpid(),
+                **{
+                    name: getattr(record, name, None)
+                    for name in ("task_id", "task_type", "queue", "attempt", "max_attempts")
+                },
+            }
+        )
+
+
+def capture_worker_logs():
+    """Append the task process's ``dewey.worker`` records to the file the test named."""
+    path = os.environ.get("DEWEY_NATIVE_TEST_LOG")
+    if path is None:
+        return
+    handler = logging.FileHandler(path)
+    handler.setFormatter(_JsonLines())
+    logger = logging.getLogger("dewey.worker")
+    logger.addHandler(handler)
+    logger.setLevel(logging.WARNING)
+
+
+@dewey.task("native.synthetic.backend_pid")
+def backend_pid(path):
+    """Record which Postgres backend this process's Django worker connection talks to."""
+    from django.db import connections
+
+    with connections[os.environ.get("DEWEY_NATIVE_TEST_ALIAS", "default")].cursor() as cursor:
+        cursor.execute("SELECT pg_backend_pid()")
+        Path(path).write_text(str(cursor.fetchone()[0]))
 
 
 def record_context(path):
@@ -82,9 +128,25 @@ class CompletionFault:
         return self.check_result(await result, operation, fault)
 
 
+def capture_spans():
+    """Trace this task process into the file the test named, through the real SDK."""
+    if os.environ.get("DEWEY_NATIVE_TEST_SPANS") is None:
+        return
+    from dewey.core.tracing import configure_tracing
+    from tests._helpers.tracing import install_provider
+
+    install_provider()  # a no-op in a forked child, which inherited the parent's
+    configure_tracing(True)
+
+
 def create_runtime():
+    from dewey.core.execution import configure_failure_details
+
     mode = os.environ["DEWEY_NATIVE_TEST_MODE"]
     owner = os.environ["DEWEY_NATIVE_TEST_OWNER"]
+    configure_failure_details(os.environ.get("DEWEY_NATIVE_TEST_FAILURE_DETAILS", "type"))
+    capture_worker_logs()
+    capture_spans()
     if mode == "django":
         import django
 
@@ -93,8 +155,9 @@ def create_runtime():
 
         from dewey.django.native import NativeDjangoStorage
 
-        connections["default"].settings_dict.setdefault("OPTIONS", {})["connect_timeout"] = 1
-        storage = NativeDjangoStorage(owner=owner, timing=TIMING, queues=["default"])
+        alias = os.environ.get("DEWEY_NATIVE_TEST_ALIAS", "default")
+        connections[alias].settings_dict.setdefault("OPTIONS", {})["connect_timeout"] = 1
+        storage = NativeDjangoStorage(owner=owner, timing=TIMING, queues=["default"], using=alias)
         return LedgerRuntime(CompletionFault(storage), close_resources=connections.close_all)
     if mode == "async":
         from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine

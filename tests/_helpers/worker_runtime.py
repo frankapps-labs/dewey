@@ -19,6 +19,8 @@ def _record(name: str) -> None:
 class Runtime:
     def __init__(self) -> None:
         _record("initialized")
+        if signal.getsignal(signal.SIGTERM) is signal.SIG_DFL:
+            _record("sigterm-default")
 
     def execute(self, assignment: Assignment) -> object:
         if assignment.task_id == "ignore-term":
@@ -59,6 +61,18 @@ def leaky_bootstrap_factory() -> Runtime:
 
 def hung_factory() -> Runtime:
     time.sleep(60)
+    return Runtime()
+
+
+def gated_factory() -> Runtime:
+    """Wait to be let through by the test: it opens ``go-<pid>`` when it is ready to."""
+    directory = Path(os.environ["DEWEY_WORKER_TEST_DIRECTORY"])
+    _record("waiting")
+    until = time.monotonic() + 30
+    while not (directory / f"go-{os.getpid()}").exists():
+        if time.monotonic() >= until:
+            raise TimeoutError("The test never opened the gate")
+        time.sleep(0.005)
     return Runtime()
 
 
@@ -165,3 +179,35 @@ def barrier_close_factory() -> BarrierCloseRuntime:
 
 def barrier_failing_close_factory() -> BarrierCloseRuntime:
     return BarrierCloseRuntime(fail_close=True)
+
+
+def slow_ready_factory() -> Runtime:
+    """A child that takes a moment to come up, so a ramp is observable."""
+    time.sleep(float(os.environ.get("DEWEY_WORKER_TEST_READY_SECONDS", "0.5")))
+    return Runtime()
+
+
+def fd_check_factory() -> Runtime:
+    """Record which of the descriptors named in the environment are still open here."""
+    directory = os.environ["DEWEY_WORKER_TEST_DIRECTORY"]
+    for raw in os.environ.get("DEWEY_WORKER_TEST_FDS", "").split(","):
+        if raw:
+            try:
+                os.fstat(int(raw))
+            except OSError:
+                (Path(directory) / f"{os.getpid()}-fd-{raw}-closed").touch()
+            else:
+                (Path(directory) / f"{os.getpid()}-fd-{raw}-open").touch()
+    return Runtime()
+
+
+class SlowCloseRuntime(Runtime):
+    """A runtime whose close() takes a while (a telemetry flush, for example)."""
+
+    def close(self) -> None:
+        time.sleep(float(os.environ.get("DEWEY_WORKER_TEST_CLOSE_SECONDS", "1.5")))
+        _record("closed")
+
+
+def slow_close_factory() -> SlowCloseRuntime:
+    return SlowCloseRuntime()

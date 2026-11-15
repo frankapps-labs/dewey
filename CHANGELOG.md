@@ -3,6 +3,89 @@
 This changelog records the public Frankapps Dewey release lineage. Earlier versions under
 the `dewey` package name predate this lineage and are intentionally not represented here.
 
+## [0.7.0] - 2026-11-15
+
+A drop-in upgrade from 0.6: no migration, no setting to change; `spawn` stays the
+default start method and tracing stays off until asked for. One log message
+changed: the inline executors' "Task dead-lettered ..." is now "Task dead ...", the
+same record the worker emits. Match failures on the record's `outcome` and `reason`
+fields rather than on the message text.
+
+### Fixed
+
+- **Workers start on small CPUs.** Task processes start one after another and the
+  worker claims as soon as the first is ready; `startup_seconds` bounds the
+  application import and each task process separately, measured from its own start,
+  and the supervisor paces startup by progress instead of one deadline from launch.
+  A worker with eight slots on 0.25 vCPU used to exit 70 before running a task; it
+  now runs its first task in about 9 s. Errors name `startup_seconds`.
+- On macOS the supervisor reported exit 71 instead of 70 when the service's process
+  group held only zombies.
+- **Every failed attempt is logged.** A handler that raised was recorded on its row
+  and reported to the alert hook, but no log record reached an error tracker. The
+  worker now logs each failed attempt on `dewey.worker`: WARNING while the task
+  retries, ERROR once it is dead, naming the exception's type, with the message and
+  `exc_info` as well under the new `failure_details: "full"`
+  (`DEWEY["FAILURE_DETAILS"]`; the default `"type"` keeps handler input and SQL
+  parameters an exception may quote out of the log pipeline), and `task_id`,
+  `task_type`, `queue`, `attempt`, `max_attempts`, `outcome` and `reason` as
+  structured fields. Attempts recovered
+  after a worker death or a time limit are logged by the recovering worker. The
+  record is sent after the settlement commits, like the alert, so a settlement the
+  database budget rolls back and retries is logged once; it goes out before the
+  alert hook, and the hook runs in a copy of the context so nothing it attaches can
+  silence the worker's own records or spans. Every value on the record is a string,
+  a number or None (the exception travels as `exc_info` only), so a JSON log handler
+  never has to find an encoder for it: Logfire imports pandas and numpy to look for
+  one, which on a small CPU held the task process long enough for the worker to
+  replace it before the attempt's span and record went out. The inline
+  `process_task` helpers log the same record on their own logger.
+- `process_task` (SQLAlchemy sync and async, Django) binds `dewey.current_task()`
+  with the policy's `statement_timeout_s`/`lock_timeout_s`, and the Django one
+  applies them to the connection the way the worker does, so a handler tested inline
+  runs under its production budgets.
+
+### Added
+
+- `start_method: "fork"` (`DEWEY["START_METHOD"]`): import the application once and
+  fork the task processes from the process that holds it: the service with the
+  plain CLI (it imports the application after the supervisor forked it), or the
+  host itself with `manage.py dewey run` (Django is already imported there).
+  Processes share the imported application copy-on-write (a six-slot Django worker
+  under `manage.py dewey run`: 129 MB instead of 438 MB of PSS; first task in a
+  second instead of four) and task processes start in milliseconds. The worker
+  closes its connections before every fork, blocks the stop signals across each
+  fork so a stop in the window is not lost, and children reset inherited signal
+  handlers; a forked service shuts logging down before it exits. Opt-in: the
+  process a child is forked from must be fork-safe. See
+  [choosing a start method](docs/native-worker.md#choosing-a-start-method) in the
+  worker docs for when to pick which, and the readiness checklist.
+- Django settings `START_METHOD`, `STARTUP_SECONDS`, `SUPERVISION_SECONDS`,
+  `SHUTDOWN_SECONDS` and `MAX_RESTARTS`.
+- **OpenTelemetry tracing**, opt-in: `pip install 'dewey[otel]'` and
+  `tracing: true` (`DEWEY["TRACING"] = True`). Each attempt a task process runs is a
+  `CONSUMER` span named `dewey task <type>`, a child of the span that created the
+  task (the row already carries its `traceparent`) or the root of a new trace for a
+  schedule tick, with `messaging.system = "dewey"` and the task id, type, queue,
+  attempt and max attempts as attributes. It is the current span while the handler
+  runs, so the handler's own spans and instrumented libraries nest under it, and it
+  ends with the exception recorded and error status when the handler raised. The
+  task process flushes the provider when the worker stops it. Dewey depends on
+  `opentelemetry-api` only; the application configures the SDK or vendor (Logfire,
+  Sentry) that exports, in the worker process as in the web process. Works with
+  `spawn` and `fork`. A worker told to trace without the API refuses to start.
+- `execution_timeout_s` in the task policy: `@dewey.task(..., execution_timeout_s=90)`
+  or `configure_policies`. Like `max_attempts` it is stamped onto the row by
+  `create_task`, `create_or_get_task` (the caller's own value still wins and is
+  part of the idempotent-creation contract) and schedule ticks, from the policy
+  resolved when the schedule was applied. The worker's `task_timeout_seconds` stays
+  the ceiling for a larger value. A schedule definition carries the field only when
+  set, so already-applied schedules report no drift after upgrading.
+- `dewey.current_task_or_none()`: `None` outside a handler, for handlers that are
+  also called directly.
+- Upgrade notes: `create_task` returns a record (use `.id`, not `.pk`), and how to
+  replace the auto-registered `TaskEntry` admin.
+
 ## [0.6.0] - 2026-11-15
 
 Dewey now owns the runner and the clock as well as the ledger. One process type,
@@ -234,6 +317,7 @@ PyPI already contains an unrelated historical 0.3.0 release.
 - Installed-wheel PostgreSQL/Redis/Huey smoke coverage plus multi-process claim tests for
   the packaged Django and SQLAlchemy paths.
 
+[0.7.0]: https://github.com/frankapps-labs/dewey/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/frankapps-labs/dewey/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/frankapps-labs/dewey/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/frankapps-labs/dewey/compare/v0.5.1...v0.5.2

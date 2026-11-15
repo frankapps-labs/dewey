@@ -121,6 +121,13 @@ DEWEY = {
     "AUTO_APPLY_SCHEDULES": False,  # single-node installs: apply at worker start
     "ALERT_HOOK": None,             # "module:function", see operations
     "TIMING": {},                   # worker limits, e.g. {"task_timeout_seconds": 600}
+    "START_METHOD": "spawn",        # or "fork": task processes share the imported app
+    "TRACING": False,               # an OpenTelemetry span per attempt, see logging
+    "FAILURE_DETAILS": "type",      # or "full": exception message and traceback, see logging
+    "STARTUP_SECONDS": 30.0,        # budget for the app import and for each task process
+    "SUPERVISION_SECONDS": 30.0,    # how long the service may go without progress
+    "SHUTDOWN_SECONDS": 30.0,       # how long a stopping worker waits for running tasks
+    "MAX_RESTARTS": 3,              # task-process crashes tolerated per service lifetime
 }
 ```
 
@@ -305,7 +312,21 @@ assert process_task(task.id) is True
 ```
 
 `process_task` is a test and eager-execution helper. It is not a production runner:
-nothing recovers a row it leaves behind if the process dies.
+nothing recovers a row it leaves behind if the process dies. It does run the handler
+the way the worker does: `dewey.current_task()` is bound, and the policy's
+`statement_timeout_s`/`lock_timeout_s` are applied (to the Django connection; with
+SQLAlchemy through `apply_task_timeouts()` in the handler, as in production).
+
+A handler that is also called directly, outside any task, can ask
+`dewey.current_task_or_none()` instead of catching `RuntimeError`:
+
+```python
+def moderate_photo(photo_id):
+    task = dewey.current_task_or_none()
+    if task is not None and task.remaining() < timedelta(seconds=10):
+        raise dewey.RetryAfter(0)
+    ...
+```
 
 ## Next
 

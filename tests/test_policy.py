@@ -124,6 +124,29 @@ class TestDecoratorRegistration:
             @task("orders.confirm", max_attemps=3)  # typo
             def confirm() -> None: ...
 
+    @pytest.mark.parametrize("bad", [0, -1, "90", True, float("inf"), float("nan")])
+    def test_invalid_execution_timeout_is_refused_at_declaration_time(self, bad):
+        with pytest.raises(ValueError, match="execution_timeout_s for task 'photos.moderate'"):
+
+            @task("photos.moderate", execution_timeout_s=bad)
+            def moderate() -> None: ...
+
+        with pytest.raises(ValueError, match="execution_timeout_s"):
+            configure_policies({"photos.moderate": {"execution_timeout_s": bad}})
+        assert registry.get("photos.moderate") is None
+
+    def test_execution_timeout_is_a_policy_field_the_project_layer_can_override(self):
+        assert TASK_DEFAULTS.execution_timeout_s is None
+
+        @task("photos.moderate", execution_timeout_s=90)
+        def moderate() -> None: ...
+
+        assert resolve_policy("photos.moderate").execution_timeout_s == 90
+        configure_policies({"photos.moderate": {"execution_timeout_s": 120.5}})
+        assert resolve_policy("photos.moderate").execution_timeout_s == 120.5
+        configure_policies({"photos.moderate": {"execution_timeout_s": None}})
+        assert resolve_policy("photos.moderate").execution_timeout_s is None
+
     @pytest.mark.parametrize("bad", [0, -1, "3", True])
     def test_invalid_max_attempts_is_refused(self, bad):
         with pytest.raises((TypeError, ValueError)):

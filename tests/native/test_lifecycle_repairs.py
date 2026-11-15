@@ -29,6 +29,15 @@ def runner_for(store, monkeypatch, **options):
     return NativeRunner(pool, StorageBridge(store), timing=TIMING)
 
 
+def wait_capacity(runner, capacity=2):
+    """Task processes start one after another; these tests need every slot up."""
+    until = time.monotonic() + 10
+    while runner.pool.capacity < capacity and time.monotonic() < until:
+        assert runner.pool.poll() == []  # nothing is assigned yet, so no events
+        time.sleep(0.005)
+    assert runner.pool.capacity == capacity
+
+
 def wait_status(engine, ids, status):
     until = time.monotonic() + 8
     while time.monotonic() < until:
@@ -52,6 +61,7 @@ def test_expiry_reaps_only_affected_child_and_sibling_completes(
     runner = runner_for(store, monkeypatch, max_restarts=0)
     try:
         runner.start()
+        wait_capacity(runner)
         pids = set(runner.pool.worker_pids)
         assert runner.step() == 2
         wait_status(engine, [first, sibling], "processing")
@@ -199,6 +209,7 @@ def test_uncertain_renewal_still_fail_stops_siblings(store, engine, monkeypatch,
     runner = runner_for(store, monkeypatch)
     try:
         runner.start()
+        wait_capacity(runner)
         pids = set(runner.pool.worker_pids)
         runner.step()
         wait_status(engine, ids, "processing")

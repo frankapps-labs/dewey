@@ -154,13 +154,16 @@ class _LedgerOperations:
         _apply(row, changes)
         if row.status != TaskStatus.PROCESSING.value:
             self.alerts.task_changed(row, row.latest_outcome)  # out of attempts: a dead letter
+            self.alerts.after_commit(ledger.outcome_log(row))
             return None
         return {
             "task_type": row.task_type,
+            "queue": row.queue,
             "args": list(row.args),
             "kwargs": dict(row.kwargs),
             "execution_token": row.execution_token,
             "attempts": row.attempts,
+            "max_attempts": row.max_attempts,
             "execution_timeout_s": row.execution_timeout_s,
             "execution_deadline_at": row.execution_deadline_at,
             "execution_seconds_left": ledger.seconds_left(row, now),
@@ -184,6 +187,7 @@ class _LedgerOperations:
             return False
         _apply(row, changes)
         self.alerts.task_changed(row, row.latest_outcome)
+        self.alerts.after_commit(ledger.outcome_log(row, failure))
         return True
 
     def renew(self, session: Session, assignment: Assignment) -> bool:
@@ -210,6 +214,7 @@ class _LedgerOperations:
             self.alerts.task_changed(
                 row, row.latest_outcome, recovered=row.latest_outcome != "abandoned"
             )
+            self.alerts.after_commit(ledger.outcome_log(row))
         return Reconciliation.SETTLED
 
     def reconcile(self, session: Session, assignment: Assignment) -> Reconciliation:
@@ -247,6 +252,7 @@ class _LedgerOperations:
                 self.alerts.task_changed(
                     row, row.latest_outcome, recovered=row.latest_outcome != "abandoned"
                 )
+                self.alerts.after_commit(ledger.outcome_log(row))
         return recovered
 
     def report_invalid(self, session: Session) -> None:

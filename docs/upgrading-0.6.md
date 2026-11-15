@@ -81,10 +81,20 @@ simply accept one duplicate run on the day you switch.
   own `execution_timeout_s`) is stopped and retried. Handlers can read
   `dewey.current_task().remaining()`.
 - **Inline `process_task` is a test helper**, not a production path. Nothing recovers
-  a row it leaves behind.
+  a row it leaves behind. It binds `dewey.current_task()` and applies the policy's
+  `statement_timeout_s`/`lock_timeout_s` the way the worker does, so a handler
+  tested inline runs under its production budgets.
+- **`create_task` returns a record, not a model instance.** On Django it is a
+  `dewey.core.types.TaskEntry` dataclass: use `.id`, not `.pk`, and load the model
+  with `TaskEntry.objects.get(id=task.id)` if you need it.
 - **Task history is recorded by a database trigger.** Each time a task fails,
   completes, dies or expires, one small row is added to `dewey_task_events` in the
   same transaction; `dewey tasks show` reads them. They are deleted with their task.
 - **A Django project with `django.contrib.admin` installed gets a Dewey page in it**,
   registered automatically. It is experimental: see the [admin overview](dashboard.md)
   for its permissions. Completed-task retention is off until you configure it.
+  There is no setting to opt out. A project that registered its own `ModelAdmin`
+  for `TaskEntry` gets `AlreadyRegistered` from whichever registration runs
+  second: list `dewey.django` before that app in `INSTALLED_APPS` and call
+  `admin.site.unregister(TaskEntry)` in the app's `admin.py` before registering
+  your own.

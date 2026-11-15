@@ -1,9 +1,15 @@
-"""Bounded, spawn-only process supervision, independent of storage and frameworks.
+"""Bounded process supervision, independent of storage and frameworks.
 
 This is not a DispatcherAdapter or a production worker runner. In particular,
 RETURNED means only that the integration callback returned, not that a task
 succeeded. The caller must reconcile durable ownership/outcome before acknowledging
 an event and reusing capacity. The pool never retries a task or releases a DB claim.
+
+Children are spawned (a fresh interpreter each) unless the pool is created with
+``start_method="fork"``, in which case they are forked from the supervising
+process after it has imported the application, and share its pages. The caller
+owns fork safety: ``prepare`` runs right before every child start so it can close
+connections that must not cross the fork.
 
 Use from one supervising thread, call poll frequently (wait only paces those
 calls), and always shut down or use a context manager. Signal handling and containment are
@@ -17,9 +23,10 @@ import inspect
 import math
 import multiprocessing
 import os
+import signal
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from multiprocessing.connection import wait as wait_for_objects
@@ -111,9 +118,32 @@ def _require_sync_result(result: object) -> None:
         raise TypeError("Async result returned by synchronous child lifecycle")
 
 
-def _child_main(connection: _ControlChannel, factory_path: str) -> None:
+START_METHODS = ("spawn", "fork")
+_STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
+
+
+def _child_main(
+    connection: _ControlChannel, factory_path: str, close_fds: Sequence[int] = ()
+) -> None:
     runtime: ChildRuntime | None = None
     initialized = False
+    # A forked child inherits the supervising process's ends of every sibling's
+    # pipe and whatever it was told to close: holding them would keep a sibling
+    # from ever seeing EOF when the supervising process dies, and would tie the
+    # service's own pipes to this process's lifetime.
+    for fd in close_fds:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    # A forked child inherits the supervising process's handlers; a task process
+    # must stop on SIGTERM the way a spawned one does. The parent kept the stop
+    # signals blocked across the fork so none could reach the inherited handler
+    # before this point; they are delivered from here on, to the defaults.
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    if hasattr(signal, "pthread_sigmask"):
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, _STOP_SIGNALS)
     try:
         try:
             created = _load_factory(factory_path)()
@@ -181,7 +211,12 @@ class WorkerPool:
     (including integration claim overhead). An already queued return is observed before
     checking the deadline; timeout is not retroactive elapsed-runtime validation. The
     runner must bound its polling cadence and any blocking storage operations.
-    Factory setup is separately bounded.
+    Factory setup is separately bounded, per child and from its own start.
+
+    Children start one after another: start() returns once the first is ready,
+    and poll() starts the next one each time the newest has become ready, so a
+    slow application import on a small CPU costs each child only its own
+    startup budget and capacity is usable before every child is up.
     """
 
     def __init__(
@@ -193,6 +228,11 @@ class WorkerPool:
         startup_timeout_seconds: float = 10.0,
         termination_timeout_seconds: float = 1.0,
         max_restarts: int = 3,
+        start_method: str = "spawn",
+        prepare: Callable[[], None] | None = None,
+        progress: Callable[[], None] | None = None,
+        cleanup_timeout_seconds: float | None = None,
+        close_in_children: Sequence[int] = (),
     ) -> None:
         if isinstance(concurrency, bool) or not isinstance(concurrency, int) or concurrency < 1:
             raise ValueError("concurrency must be a positive integer")
@@ -211,18 +251,35 @@ class WorkerPool:
         _seconds("task_timeout_seconds", task_timeout_seconds)
         _seconds("startup_timeout_seconds", startup_timeout_seconds)
         _seconds("termination_timeout_seconds", termination_timeout_seconds)
+        if cleanup_timeout_seconds is None:
+            cleanup_timeout_seconds = termination_timeout_seconds
+        _seconds("cleanup_timeout_seconds", cleanup_timeout_seconds)
+        if start_method not in START_METHODS:
+            raise ValueError(f"start_method must be one of {', '.join(START_METHODS)}")
         self.factory_path = factory_path
         self.concurrency = concurrency
         self.task_timeout_seconds = task_timeout_seconds
         self.startup_timeout_seconds = startup_timeout_seconds
         self.termination_timeout_seconds = termination_timeout_seconds
+        #: How long idle children get, together, to run their runtime's close()
+        #: at shutdown (a telemetry flush, for one) before they are terminated.
+        self.cleanup_timeout_seconds = max(cleanup_timeout_seconds, termination_timeout_seconds)
+        #: File descriptors a forked child closes at once: the caller's own
+        #: pipes, which a child must not keep open (see _child_main).
+        self.close_in_children = tuple(close_in_children)
         self.max_restarts = max_restarts
-        self._context = multiprocessing.get_context("spawn")
+        self.start_method = start_method
+        #: Called in this process right before every child start. With fork it
+        #: must close every connection the child would otherwise inherit.
+        self.prepare = prepare
+        self._progress = progress
+        self._context: Any = multiprocessing.get_context(start_method)
         self._slots: list[_Slot] = []
         self._events: dict[str, WorkerEvent] = {}
         self._owner = (os.getpid(), threading.get_ident())
         self._started = False
         self._closing = False
+        self._draining = False
         self._closed = False
         self._broken = False
         self._cleanup_failed = False
@@ -239,13 +296,31 @@ class WorkerPool:
             raise PoolBroken("Worker pool is not accepting work")
 
     def _spawn(self, restarts: int = 0) -> _Slot:
+        if self.prepare is not None:
+            self.prepare()
         parent, child = self._context.Pipe()
+        close_fds: tuple[int, ...] = ()
+        if self.start_method == "fork":
+            # Our end of the new pipe, our ends of every sibling's pipe, and the
+            # caller's own descriptors: none of them belongs in the child.
+            close_fds = (
+                parent.fileno(),
+                *(slot.connection.fileno() for slot in self._slots),
+                *self.close_in_children,
+            )
         process = self._context.Process(
             target=_child_main,
-            args=(child, self.factory_path),
+            args=(child, self.factory_path, close_fds),
             name="dewey-worker",
             daemon=True,
         )
+        # A forked child inherits this process's signal handlers until
+        # _child_main resets them; a stop signal in that window would run a
+        # handler whose state is a dead copy. Block the stop signals across the
+        # fork; the child unblocks them once its handlers are its own.
+        blocked = None
+        if self.start_method == "fork" and hasattr(signal, "pthread_sigmask"):
+            blocked = signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)
         try:
             process.start()
         except BaseException:
@@ -253,19 +328,26 @@ class WorkerPool:
             child.close()
             process.close()
             raise
+        finally:
+            if blocked is not None:
+                signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
         child.close()
         return _Slot(process, parent, time.monotonic(), restarts=restarts)
 
     def start(self) -> None:
+        """Start the first child and return once it is ready; the rest follow in poll()."""
         self._check_owner()
         if self._started or self._closed:
             raise PoolBroken("Worker pool can only be started once")
         self._started = True
         try:
-            for _ in range(self.concurrency):
-                self._slots.append(self._spawn())
-            while not all(slot.ready for slot in self._slots):
+            self._slots.append(self._spawn())
+            reported = time.monotonic()
+            while not self._slots[0].ready:
                 self.poll()
+                if self._progress is not None and time.monotonic() - reported >= 0.1:
+                    self._progress()
+                    reported = time.monotonic()
                 time.sleep(0.005)
         except BaseException:
             self._broken = True
@@ -375,7 +457,7 @@ class WorkerPool:
         if self._closed:
             return []
         events: list[WorkerEvent] = []
-        for slot in self._slots:
+        for slot in list(self._slots):
             if slot.event is not None:
                 continue
             message = None
@@ -388,6 +470,18 @@ class WorkerPool:
                 kind, ticket = message
                 if kind == "ready" and not slot.ready and slot.ticket is None:
                     slot.ready = True
+                    if (
+                        slot is self._slots[-1]
+                        and len(self._slots) < self.concurrency
+                        and not (
+                            self._closing or self._draining or self._broken
+                        )  # none on the way out
+                    ):
+                        try:
+                            self._slots.append(self._spawn())
+                        except BaseException:
+                            self._broken = True
+                            raise
                 elif kind in ("returned", "execution_error") and ticket == slot.ticket and ticket:
                     outcome = Outcome.RETURNED if kind == "returned" else Outcome.EXECUTION_ERROR
                     # The child exits through runtime.close() after an error.
@@ -414,7 +508,11 @@ class WorkerPool:
                 and time.monotonic() - slot.started_at >= self.startup_timeout_seconds
             ):
                 self._broken = True
-                raise PoolBroken("Worker initialization timed out")
+                raise PoolBroken(
+                    "Worker initialization timed out: a task process took longer than "
+                    f"startup_timeout_seconds={self.startup_timeout_seconds:g} to import "
+                    "the application"
+                )
             elif slot.ticket and time.monotonic() - slot.assigned_at >= self.task_timeout_seconds:
                 self._terminate(slot)
                 events.append(self._event(slot, Outcome.TIMED_OUT))
@@ -545,6 +643,14 @@ class WorkerPool:
             return
         raise ValueError("Unknown or already acknowledged ticket")
 
+    def stop_starting(self) -> None:
+        """Start no further staged children: the worker is draining.
+
+        Children already running keep their work; shutdown() closes them later.
+        """
+        self._check_owner()
+        self._draining = True
+
     def shutdown(self, *, grace_seconds: float = 0.0) -> list[WorkerEvent]:
         """Drain for a bounded grace, then terminate/reap all owned children.
 
@@ -576,15 +682,30 @@ class WorkerPool:
         finally:
             failures = []
             remaining = []
+            # Every idle child is asked to close at once, so their cleanups (a
+            # telemetry flush, a connection disposal) overlap, and each is joined
+            # against one shared budget rather than a per-slot termination slice.
+            closing: list[_Slot] = []
+            for slot in self._slots:
+                if slot.ticket is not None and slot.event is None:
+                    continue  # busy: reaped below, never asked to close first
+                if slot.process.is_alive():
+                    try:
+                        slot.connection.send(None)
+                        closing.append(slot)
+                    except (EOFError, OSError):
+                        pass
+            cleanup_deadline = time.monotonic() + self.cleanup_timeout_seconds
             for slot in self._slots:
                 try:
                     busy = slot.ticket is not None and slot.event is None
-                    if not busy and slot.process.is_alive():
-                        try:
-                            slot.connection.send(None)
-                        except (EOFError, OSError):
-                            pass
-                        slot.process.join(self.termination_timeout_seconds)
+                    if slot in closing:
+                        slot.process.join(
+                            max(
+                                self.termination_timeout_seconds,
+                                cleanup_deadline - time.monotonic(),
+                            )
+                        )
                     self._terminate(slot)
                     self._observe_cleanup(slot)
                     if busy and slot.event is None:

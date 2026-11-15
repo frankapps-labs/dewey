@@ -20,6 +20,8 @@ def create_application(context):
     mode = os.environ.get("DEWEY_PUBLIC_TEST_MODE", "sync")
     if mode == "bootstrap-stall" and context.role == "parent":
         time.sleep(20)
+    if mode == "slow-start" and context.role == "task":
+        time.sleep(0.8)  # each task process takes a while to come up, but under budget
 
     class Storage:
         loop = None
@@ -27,6 +29,12 @@ def create_application(context):
         def operation(self, operation):
             if mode == "stall" and context.role == "parent" and operation == "recover":
                 time.sleep(20)
+            if (
+                mode == "slow-start"
+                and context.role == "parent"
+                and operation in ("readiness", "ops")
+            ):
+                time.sleep(1.0)  # bounded by db_wait_seconds in a real storage
             return [] if operation in ("claim", "recover") else None
 
         async def awaited(self, operation):

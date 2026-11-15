@@ -11,23 +11,49 @@ One dict, so it is obvious in a diff what Dewey is configured to do::
         "AUTO_APPLY_SCHEDULES": False,  # single-node installs: apply at worker start
         "ALERT_HOOK": None,             # "module:function" called with alert dicts
         "TIMING": {},                   # overrides for dewey.worker.default_timing()
+        "START_METHOD": "spawn",        # or "fork": task processes share the imported app
+        "STARTUP_SECONDS": 30.0,        # budget for the app import and for each task process
+        "SUPERVISION_SECONDS": 30.0,    # how long the parent may go without progress
+        "SHUTDOWN_SECONDS": 30.0,       # how long a stopping worker waits for running tasks
+        "MAX_RESTARTS": 3,              # task-process crashes tolerated per service lifetime
+        "TRACING": False,               # an OpenTelemetry span per attempt (needs dewey[otel])
+        "FAILURE_DETAILS": "type",      # or "full": exception message and traceback in the log
     }
 """
 
 from __future__ import annotations
 
+from dataclasses import fields
 from typing import Any
 
 from django.conf import settings
 
+from dewey.worker import WorkerConfig
+
+#: The Django setting for each worker option, so the two cannot drift: the
+#: defaults below are the worker's own, and only a key the project configured is
+#: forwarded to it (see ``dewey.django.worker.worker_settings``).
+WORKER_SETTINGS: dict[str, str] = {
+    "QUEUES": "queues",
+    "CONCURRENCY": "concurrency",
+    "AUTO_APPLY_SCHEDULES": "auto_apply_schedules",
+    "ALERT_HOOK": "alert_hook",
+    "TIMING": "timing",
+    "START_METHOD": "start_method",
+    "STARTUP_SECONDS": "startup_seconds",
+    "SUPERVISION_SECONDS": "supervision_seconds",
+    "SHUTDOWN_SECONDS": "shutdown_seconds",
+    "MAX_RESTARTS": "max_restarts",
+    "TRACING": "tracing",
+    "FAILURE_DETAILS": "failure_details",
+}
+_WORKER_DEFAULTS = {field.name: field.default for field in fields(WorkerConfig)}
+
 DEFAULTS: dict[str, Any] = {
     "DATABASE": "default",
-    "QUEUES": ("default",),
-    "CONCURRENCY": 2,
     "AUTODISCOVER": "tasks",
-    "AUTO_APPLY_SCHEDULES": False,
-    "ALERT_HOOK": None,
-    "TIMING": {},
+    "TIMING": {},  # the worker derives its timing from the concurrency
+    **{key: _WORKER_DEFAULTS[name] for key, name in WORKER_SETTINGS.items() if name != "timing"},
 }
 
 
@@ -54,4 +80,4 @@ def get_settings() -> dict[str, Any]:
     return {**DEFAULTS, **configured}
 
 
-__all__ = ["DEFAULTS", "get_settings"]
+__all__ = ["DEFAULTS", "WORKER_SETTINGS", "get_settings"]

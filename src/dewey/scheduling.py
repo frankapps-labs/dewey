@@ -68,7 +68,7 @@ class Schedule:
         the worker that later creates its ticks may not (a rolling deploy).
         """
         policy = resolve_policy(self.task_type)
-        return {
+        definition = {
             "task_type": self.task_type,
             "when": self.when.to_dict(),
             "args": encode_args(self.args),
@@ -80,6 +80,11 @@ class Schedule:
             "priority": policy.priority if self.priority is None else self.priority,
             "max_attempts": policy.max_attempts,
         }
+        if policy.execution_timeout_s is not None:
+            # Only when set: a schedule applied before this field existed keeps
+            # its hash, so an upgrade does not report every schedule as changed.
+            definition["execution_timeout_s"] = policy.execution_timeout_s
+        return definition
 
 
 def definition_hash(definition: Mapping[str, Any]) -> str:
@@ -272,6 +277,7 @@ class Tick:
             "queue": definition["queue"],
             "priority": definition["priority"],
             "max_attempts": definition["max_attempts"],
+            "execution_timeout_s": definition.get("execution_timeout_s"),
             "expires_at": self.expires_at,
             "idempotency_key": tick_key(name, self.at),
         }
