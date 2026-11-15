@@ -1,7 +1,7 @@
 [build-system]
 # Exact, cooled build backends. Keep these equal to dependency-groups.build;
 # release and CI builds run without isolation from that admitted lock.
-requires = ["setuptools==83.0.0", "wheel==0.47.0"]
+requires = ["setuptools==83.0.0", "wheel==0.48.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -61,22 +61,22 @@ admission = [
 ]
 build = [
     "setuptools==83.0.0",
-    "wheel==0.47.0",
+    "wheel==0.48.0",
 ]
 release = [
     "setuptools==83.0.0",
-    "wheel==0.47.0",
+    "wheel==0.48.0",
     "twine==7.0.0",
 ]
 audit = [
     "pip-audit==2.10.1",
     # Cooled transitive ceilings keep the scanner graph outside the seven-day
     # window as of 2026-08-13.
-    "cyclonedx-python-lib==11.11.0",
-    "platformdirs==4.11.0",
+    "cyclonedx-python-lib==11.12.0",
+    "platformdirs==4.14.5",
 ]
 wheel-smoke = [
-    "psycopg2-binary==2.9.12",
+    "psycopg2-binary==2.9.13",
 ]
 compat-py311-django52 = [
     "Django==5.2.19; python_version == '3.11'",
