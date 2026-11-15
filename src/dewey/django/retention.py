@@ -39,11 +39,19 @@ ERRORS = {
     "unsupported_database": "Managed retention requires PostgreSQL.",
     "incompatible_isolation": "Managed cleanup requires READ COMMITTED isolation.",
     "cleanup_failed": "Cleanup failed or its acknowledgement was uncertain. Reconcile the recorded run ID with host logs.",
+    "invalid_settings": "Invalid retention settings.",
+    "actor_required": "A valid actor is required.",
+    "reason_required": "A safe audit reason of 1–500 characters is required.",
+    "configuration_changed": "Retention configuration changed; refresh before saving.",
 }
 
 
 class RetentionRejected(ValueError):
-    pass
+    """A refused retention change. ``code`` is a key of ``ERRORS``."""
+
+    def __init__(self, code: str, detail: str = ""):
+        super().__init__(detail or ERRORS[code])
+        self.code = code
 
 
 class RetentionCleanupError(RuntimeError):
@@ -216,30 +224,30 @@ def update_retention(*, days, enabled, revision, actor, reason, using=None):
     try:
         config = RetentionConfig(days, enabled, revision)
     except ValueError as exc:
-        raise RetentionRejected(str(exc)) from exc
+        raise RetentionRejected("invalid_settings", str(exc)) from exc
     if not isinstance(actor, str) or not 1 <= len(actor) <= 200 or any(ord(c) < 32 for c in actor):
-        raise RetentionRejected("A valid actor is required.")
+        raise RetentionRejected("actor_required")
     if (
         not isinstance(reason, str)
         or not 1 <= len(reason.strip()) <= 500
         or any(ord(c) < 32 for c in reason)
     ):
-        raise RetentionRejected("A safe audit reason of 1–500 characters is required.")
+        raise RetentionRejected("reason_required")
     alias = resolve_db_alias(using)
     if connections[alias].vendor != "postgresql":
-        raise RetentionRejected(ERRORS["unsupported_database"])
+        raise RetentionRejected("unsupported_database")
     with transaction.atomic(using=alias):
         _timeouts(alias)
         row = _locked_policy(alias)
         if row.revision != revision:
-            raise RetentionRejected("Retention configuration changed; refresh before saving.")
+            raise RetentionRejected("configuration_changed")
         if enabled:
             decision = safety_decision(config, alias)
             if not decision.allows(config):
-                raise RetentionRejected(ERRORS["host_not_approved"])
+                raise RetentionRejected("host_not_approved")
             block = _schema_block(alias)
             if block:
-                raise RetentionRejected(ERRORS[block])
+                raise RetentionRejected(block)
         old = _config(row)
         if (days, enabled) == (old.days, old.enabled):
             return {"version": 1, "changed": False, "config": asdict(old)}

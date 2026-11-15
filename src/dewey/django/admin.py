@@ -14,8 +14,8 @@ from dewey.dashboard import asset
 from dewey.dashboard.contract import TaskFilter
 from dewey.django.dashboard import DjangoDashboardProvider
 from dewey.django.models import TaskEntry
-from dewey.django.operations import RetryRejected, retry_task_once
-from dewey.django.retention import RetentionRejected, retention_state, update_retention
+from dewey.django.operations import RETRY_REJECTIONS, RetryRejected, retry_task_once
+from dewey.django.retention import ERRORS, RetentionRejected, retention_state, update_retention
 
 
 @admin.register(TaskEntry)
@@ -150,7 +150,8 @@ class TaskEntryAdmin(admin.ModelAdmin):
                 using=getattr(settings, "DEWEY_DASHBOARD_DATABASE_ALIAS", None),
             )
         except RetryRejected as exc:
-            return JsonResponse({"error": str(exc)}, status=409)
+            # Fixed text chosen by code: nothing from the exception reaches the response.
+            return JsonResponse({"error": RETRY_REJECTIONS[exc.code]}, status=409)
         return JsonResponse(data)
 
     def configure_retention(self, request):
@@ -180,7 +181,7 @@ class TaskEntryAdmin(admin.ModelAdmin):
                 using=getattr(settings, "DEWEY_DASHBOARD_DATABASE_ALIAS", None),
             )
         except RetentionRejected as exc:
-            return JsonResponse({"error": str(exc)}, status=409)
+            return JsonResponse({"error": ERRORS[exc.code]}, status=409)
         return JsonResponse(data)
 
     def asset_view(self, request, name):

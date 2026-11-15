@@ -105,8 +105,23 @@ def retry_decision(task, event, now) -> RetryDecision:
         return denied
 
 
+#: Why a retry can be refused: the only text about it an HTTP response may carry.
+RETRY_REJECTIONS = {
+    "reason_required": "A safe reason of 1–500 characters is required.",
+    "actor_required": "Actor identity is required.",
+    "history_unavailable": "Transition history is unavailable.",
+    "task_not_found": "Task not found.",
+    "task_changed": "Task changed; refresh diagnostics before retry.",
+    "not_retryable": "This task cannot be retried now; its diagnostics say why.",
+}
+
+
 class RetryRejected(ValueError):
-    pass
+    """A refused retry. ``code`` is a key of ``RETRY_REJECTIONS``."""
+
+    def __init__(self, code: str, detail: str = ""):
+        super().__init__(detail or RETRY_REJECTIONS[code])
+        self.code = code
 
 
 def retry_task_once(
@@ -122,16 +137,16 @@ def retry_task_once(
         or not 1 <= len(reason.strip()) <= 500
         or any(ord(c) < 32 for c in reason)
     ):
-        raise RetryRejected("A safe reason of 1–500 characters is required.")
+        raise RetryRejected("reason_required")
     if not isinstance(actor, str) or not 1 <= len(actor) <= 200:
-        raise RetryRejected("Actor identity is required.")
+        raise RetryRejected("actor_required")
     alias = resolve_db_alias(using)
     with transaction.atomic(using=alias):
         if history_start(alias) is None:
-            raise RetryRejected("Transition history is unavailable.")
+            raise RetryRejected("history_unavailable")
         task = TaskEntry.objects.using(alias).select_for_update().filter(pk=task_id).first()
         if task is None:
-            raise RetryRejected("Task not found.")
+            raise RetryRejected("task_not_found")
         now = database_now(alias)  # Fresh after waiting for the row lock.
         event = (
             TaskEvent.objects.using(alias)
@@ -141,10 +156,10 @@ def retry_task_once(
             .first()
         )
         if event is None or event.pk != event_id or task.attempts != attempt:
-            raise RetryRejected("Task changed; refresh diagnostics before retry.")
+            raise RetryRejected("task_changed")
         decision = retry_decision(task, event, now)
         if not decision.allowed:
-            raise RetryRejected(decision.explanation)
+            raise RetryRejected("not_retryable", decision.explanation)
         old_budget = task.max_attempts
         task.max_attempts = task.attempts + 1
         task.status = "pending"
