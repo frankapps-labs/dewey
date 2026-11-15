@@ -36,29 +36,35 @@ DB_PASSWORD = parsed.password or "postgres"
 
 failures: list[str] = []
 
-SETTINGS = f"""
-DATABASES = {{
-    "default": {{
+# The project reads its connection from the environment, as a real one should:
+# no credential is written to disk.
+SETTINGS = """
+import os
+from urllib.parse import urlparse
+
+_db = urlparse(os.environ["DEWEY_SMOKE_DB_URL"])
+DATABASES = {
+    "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": {DB_NAME!r},
-        "USER": {DB_USER!r},
-        "PASSWORD": {DB_PASSWORD!r},
-        "HOST": {DB_HOST!r},
-        "PORT": {str(DB_PORT)!r},
-    }}
-}}
+        "NAME": os.environ.get("DEWEY_SMOKE_DB_NAME", "dewey_wheel_smoke"),
+        "USER": _db.username or "postgres",
+        "PASSWORD": _db.password or "postgres",
+        "HOST": _db.hostname or "localhost",
+        "PORT": str(_db.port or 5432),
+    }
+}
 INSTALLED_APPS = ["dewey.django", "smokeapp"]
 USE_TZ = True
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
-DEWEY = {{
+DEWEY = {
     "AUTO_APPLY_SCHEDULES": True,
-    "TIMING": {{
+    "TIMING": {
         "renewal_interval_seconds": 1,
         "poll_interval_seconds": 0.2,
         "db_wait_seconds": 1,
         "termination_seconds": 2,
-    }},
-}}
+    },
+}
 """
 
 TASKS = """
