@@ -28,18 +28,28 @@ def create_application(context: WorkerContext) -> WorkerApplication:
 
 
 def worker_settings() -> dict[str, Any]:
-    """``settings.DEWEY`` as worker configuration."""
-    from dewey.django.conf import get_settings
+    """``settings.DEWEY`` as worker configuration.
 
-    settings = get_settings()
-    return {
-        "factory": FACTORY,
-        "queues": tuple(settings["QUEUES"]),
-        "concurrency": settings["CONCURRENCY"],
-        "auto_apply_schedules": settings["AUTO_APPLY_SCHEDULES"],
-        "alert_hook": settings["ALERT_HOOK"],
-        "timing": dict(settings["TIMING"]),
-    }
+    Only the keys the project configured are forwarded; everything else takes
+    the worker's own default, so the two cannot drift.
+    """
+    from django.conf import settings as django_settings
+
+    from dewey.django.conf import WORKER_SETTINGS, get_settings
+
+    settings = get_settings()  # validates the keys
+    configured = set(getattr(django_settings, "DEWEY", None) or {})
+    options: dict[str, Any] = {"factory": FACTORY}
+    for key, name in WORKER_SETTINGS.items():
+        if key not in configured:
+            continue
+        value = settings[key]
+        if key == "QUEUES":
+            value = tuple(value)
+        elif key == "TIMING":
+            value = dict(value)
+        options[name] = value
+    return options
 
 
 __all__ = ["FACTORY", "create_application", "worker_settings"]

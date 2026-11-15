@@ -91,6 +91,16 @@ def current_task() -> TaskContext:
     return value
 
 
+def current_task_or_none() -> TaskContext | None:
+    """The admitted handler's identity, or None outside a Dewey handler.
+
+    For a handler that is also called directly (a management command, a test,
+    a request): ``if (task := dewey.current_task_or_none()) and task.remaining()
+    < limit`` needs no ``try``/``except RuntimeError``.
+    """
+    return _current.get()
+
+
 @contextmanager
 def _bind_task(value: TaskContext) -> Iterator[TaskContext]:
     token = _current.set(value)
@@ -100,4 +110,4 @@ def _bind_task(value: TaskContext) -> Iterator[TaskContext]:
         _current.reset(token)
 
 
-__all__ = ["TaskContext", "current_task"]
+__all__ = ["TaskContext", "current_task", "current_task_or_none"]

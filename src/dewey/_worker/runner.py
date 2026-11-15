@@ -58,6 +58,25 @@ class NativeRunner:
         self._progress = progress
         self._can_claim = can_claim
         self._auto_apply_schedules = auto_apply_schedules
+        if pool.start_method == "fork":
+            # A forked task process must not inherit this process's connections:
+            # release them before every fork (Django and SQLAlchemy reconnect on
+            # next use). Without a way to do that, fork is not safe to run.
+            if close_resources is None:
+                raise ValueError(
+                    "start_method=fork needs close_resources: a forked task process must "
+                    "not inherit this process's database connections"
+                )
+            if pool.prepare is not None:
+                raise ValueError(
+                    "The pool already has a prepare hook; NativeRunner releases the "
+                    "connections before each fork itself"
+                )
+            pool.prepare = self._release_connections
+
+    def _release_connections(self) -> None:
+        assert self._close_resources is not None
+        self.loop.invoke(self._close_resources)
 
     def call(self, operation, *args):
         try:

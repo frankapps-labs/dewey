@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import multiprocessing
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -63,10 +64,10 @@ def test_reaping_assertion_never_sends_a_signal(monkeypatch):
 def test_ready_children_are_spawned_and_initialized_locally(tmp_path, monkeypatch):
     monkeypatch.setenv("DEWEY_WORKER_TEST_DIRECTORY", str(tmp_path))
     with make_pool(concurrency=2) as pool:
+        wait_capacity(pool, 2)  # the second child starts once the first is ready
         pids = pool.worker_pids
         assert len(set(pids)) == 2
         assert os.getpid() not in pids
-        assert pool.capacity == 2
         assert len(list(tmp_path.glob("*-initialized"))) == 2
     assert len(list(tmp_path.glob("*-closed"))) == 2
     assert_reaped(pids)
@@ -104,6 +105,7 @@ def test_async_handler_hard_timeout_terminates_process(tmp_path, monkeypatch):
 
 def test_slots_stay_reserved_until_acknowledged():
     with make_pool(concurrency=2) as pool:
+        wait_capacity(pool, 2)
         assignments = [Assignment(f"job-{i}", f"token-{i}") for i in range(2)]
         tickets = [pool.submit(assignment) for assignment in assignments]
         with pytest.raises(NoCapacity):
@@ -248,8 +250,12 @@ def test_hung_bootstrap_is_bounded():
         startup_timeout_seconds=0.5,
     )
     before = {p.pid for p in multiprocessing.active_children()}
-    with pytest.raises(PoolBroken, match="initialization timed out"):
+    with pytest.raises(PoolBroken, match="initialization timed out") as timed_out:
         pool.start()
+    assert "startup_timeout_seconds=0.5" in str(timed_out.value)  # the pool's own parameter
+    assert "startup_seconds" not in str(
+        timed_out.value
+    )  # a worker-level name the pool does not know
     assert {p.pid for p in multiprocessing.active_children()} == before
 
 
@@ -551,3 +557,168 @@ def test_core_import_does_not_import_optional_frameworks():
         [sys.executable, "-I", "-c", script, src], capture_output=True, text=True, timeout=10
     )
     assert completed.returncode == 0, completed.stderr
+
+
+def test_children_start_one_after_another(tmp_path, monkeypatch):
+    """The next child starts only once the newest is ready: slow imports on a small
+    CPU cost each child its own startup budget, not all of them at once."""
+    monkeypatch.setenv("DEWEY_WORKER_TEST_DIRECTORY", str(tmp_path))
+    waiting_when_first_gate_opened = []
+
+    def open_gates():
+        for ordinal in range(2):
+            until = time.monotonic() + 10
+            while len(list(tmp_path.glob("*-waiting"))) <= ordinal and time.monotonic() < until:
+                time.sleep(0.005)
+            if ordinal == 0:
+                time.sleep(0.5)  # a second child would have announced itself by now
+                waiting_when_first_gate_opened.append(len(list(tmp_path.glob("*-waiting"))))
+            newest = max(tmp_path.glob("*-waiting"), key=lambda path: path.stat().st_mtime_ns)
+            (tmp_path / f"go-{newest.name.split('-')[0]}").touch()
+
+    opener = threading.Thread(target=open_gates, daemon=True)
+    opener.start()
+    pool = make_pool(factory_path="tests._helpers.worker_runtime:gated_factory", concurrency=2)
+    with pool:
+        assert pool.capacity == 1  # start() returns with the first child ready
+        wait_capacity(pool, 2)
+        opener.join(timeout=5)
+    assert waiting_when_first_gate_opened == [1]
+
+
+def test_fork_children_are_prepared_and_reset_inherited_signal_handlers(tmp_path, monkeypatch):
+    monkeypatch.setenv("DEWEY_WORKER_TEST_DIRECTORY", str(tmp_path))
+    prepared = []
+    previous = signal.signal(signal.SIGTERM, lambda signum, frame: None)
+    try:
+        pool = make_pool(
+            concurrency=2, max_restarts=1, start_method="fork", prepare=lambda: prepared.append(1)
+        )
+        with pool:
+            wait_capacity(pool, 2)
+            assert len(prepared) == 2  # once before every fork, in the parent
+            assert len(list(tmp_path.glob("*-sigterm-default"))) == 2
+            ticket = pool.submit(Assignment("hang", "token"))
+            started = time.monotonic()
+            event = pool.stop(ticket)  # SIGTERM must end the child, not reach our handler
+            assert event.outcome == Outcome.STOPPED
+            assert time.monotonic() - started < pool.termination_timeout_seconds
+            pool.acknowledge(ticket)
+            assert len(prepared) == 3  # the replacement was prepared too
+            wait_capacity(pool, 2)
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def test_a_rejected_start_method_fails_before_any_child():
+    with pytest.raises(ValueError, match="start_method"):
+        make_pool(start_method="forkserver")
+
+
+def test_no_child_is_started_while_the_pool_is_closing(tmp_path, monkeypatch):
+    """A child that reports ready during shutdown must not trigger the next
+    staged start: a closing pool only gets smaller."""
+    monkeypatch.setenv("DEWEY_WORKER_TEST_DIRECTORY", str(tmp_path))
+    monkeypatch.setenv("DEWEY_WORKER_TEST_READY_SECONDS", "0.4")
+    pool = make_pool(
+        factory_path="tests._helpers.worker_runtime:slow_ready_factory",
+        concurrency=3,
+        task_timeout_seconds=5,
+    )
+    spawns = []
+    original = pool._spawn
+
+    def counted(*args, **kwargs):
+        spawns.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(pool, "_spawn", counted)
+    pool.start()  # the first child is ready; the second is starting
+    assert len(spawns) == 2
+    pool.submit(Assignment("hang", "d"))  # keep the pool busy, so shutdown polls during its grace
+    pool.shutdown(grace_seconds=1.0)  # the second child reports ready in this window
+    assert len(spawns) == 2  # no third start on the way out
+
+
+def test_no_child_is_started_while_the_worker_drains(tmp_path, monkeypatch):
+    """The service drains through poll() before it shuts the pool down: once it
+    stops starting, a child that reports ready must not trigger the next start."""
+    monkeypatch.setenv("DEWEY_WORKER_TEST_DIRECTORY", str(tmp_path))
+    monkeypatch.setenv("DEWEY_WORKER_TEST_READY_SECONDS", "0.4")
+    pool = make_pool(
+        factory_path="tests._helpers.worker_runtime:slow_ready_factory",
+        concurrency=3,
+        task_timeout_seconds=5,
+    )
+    spawns = []
+    original = pool._spawn
+
+    def counted(*args, **kwargs):
+        spawns.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(pool, "_spawn", counted)
+    try:
+        pool.start()  # the first child is ready; the second is starting
+        assert len(spawns) == 2
+        pool.stop_starting()  # the service saw a stop and drains
+        until = time.monotonic() + 3
+        while time.monotonic() < until and pool.capacity < 2:
+            pool.poll()  # what the drain loop's runner.step() does
+            time.sleep(0.02)
+        assert pool.capacity == 2  # the second child came up and serves the drain
+        assert len(spawns) == 2  # but no third start
+    finally:
+        pool.shutdown(grace_seconds=0)
+
+
+def test_a_forked_child_closes_the_pools_other_pipe_ends(tmp_path, monkeypatch):
+    """A forked child inherits the supervising process's ends of every sibling's
+    pipe and the caller's own descriptors; it must not hold them."""
+    monkeypatch.setenv("DEWEY_WORKER_TEST_DIRECTORY", str(tmp_path))
+    extra_r, extra_w = os.pipe()  # stands in for the service's status pipe
+    monkeypatch.setenv("DEWEY_WORKER_TEST_FDS", str(extra_w))
+    pool = make_pool(
+        factory_path="tests._helpers.worker_runtime:fd_check_factory",
+        concurrency=2,
+        start_method="fork",
+        close_in_children=(extra_w,),
+    )
+    try:
+        pool.start()
+        until = time.monotonic() + 5
+        while pool.capacity < 2 and time.monotonic() < until:
+            pool.poll()
+            time.sleep(0.01)
+        assert pool.capacity == 2
+        assert len(list(tmp_path.glob(f"*-fd-{extra_w}-closed"))) == 2
+        assert list(tmp_path.glob("*-fd-*-open")) == []
+        os.fstat(extra_w)  # still open here: the pool closes it in children only
+    finally:
+        pool.shutdown(grace_seconds=0)
+        os.close(extra_r)
+        os.close(extra_w)
+
+
+def test_idle_children_share_the_cleanup_budget_at_shutdown(tmp_path, monkeypatch):
+    """A child's close() (a telemetry flush, for one) may take longer than one
+    termination slice; idle children are asked to close together and joined
+    against the pool's cleanup budget, so both finish instead of being killed."""
+    monkeypatch.setenv("DEWEY_WORKER_TEST_DIRECTORY", str(tmp_path))
+    monkeypatch.setenv("DEWEY_WORKER_TEST_CLOSE_SECONDS", "0.6")
+    pool = make_pool(
+        factory_path="tests._helpers.worker_runtime:slow_close_factory",
+        concurrency=2,
+        termination_timeout_seconds=0.25,
+        cleanup_timeout_seconds=3.0,
+    )
+    pool.start()
+    until = time.monotonic() + 5
+    while pool.capacity < 2 and time.monotonic() < until:
+        pool.poll()
+        time.sleep(0.01)
+    assert pool.capacity == 2
+    started = time.monotonic()
+    pool.shutdown(grace_seconds=0)
+    assert len(list(tmp_path.glob("*-closed"))) == 2  # neither was killed mid-close
+    assert time.monotonic() - started < 3.0  # they closed together, not one after another

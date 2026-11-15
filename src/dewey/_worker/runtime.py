@@ -12,6 +12,7 @@ from dewey._worker.pool import Assignment
 from dewey.context import TaskContext, _bind_task
 from dewey.core.execution import resolve_handler
 from dewey.core.logging import restore_trace
+from dewey.core.tracing import attempt_span, flush_spans
 from dewey.policy import resolve_policy
 
 #: How long a task process keeps asking a ledger that is too slow to answer in
@@ -30,10 +31,19 @@ class LedgerRuntime:
     async disposal callbacks are supported; no shared engine/session ownership.
     """
 
-    def __init__(self, storage: LedgerStorage, *, close_resources: Callable[[], Any]):
+    def __init__(
+        self,
+        storage: LedgerStorage,
+        *,
+        close_resources: Callable[[], Any],
+        flush_seconds: float | None = None,
+    ):
         self.storage = storage
         self.loop = ChildLoop()
         self.close_resources = close_resources
+        #: How long close() may spend exporting spans: the worker gives a task
+        #: process this much to close before it is terminated.
+        self.flush_seconds = flush_seconds
         try:
             self.loop.invoke(storage.call, "readiness")
         except BaseException:
@@ -61,36 +71,48 @@ class LedgerRuntime:
         if invocation is None:
             return
         failure = None
-        try:
-            handler = resolve_handler(invocation["task_type"], None)
-            policy = resolve_policy(invocation["task_type"])
-            left = invocation.get("execution_seconds_left")
-            context = TaskContext(
-                assignment.task_id,
-                invocation["task_type"],
-                invocation["attempts"],
-                deadline=invocation.get("execution_deadline_at"),
-                statement_timeout_s=policy.statement_timeout_s,
-                lock_timeout_s=policy.lock_timeout_s,
-                _stops_at=None if left is None else time.monotonic() + left,
-            )
-            with ExitStack() as stack:
-                stack.enter_context(_bind_task(context))
-                stack.enter_context(restore_trace(invocation.get("trace")))
-                # A storage may prepare its framework for the handler (Django
-                # applies the task's database budgets to its connection).
-                scope = getattr(self.storage, "handler_scope", None)
-                if scope is not None:
-                    stack.enter_context(scope(context))
-                self.loop.invoke_handler(handler, *invocation["args"], **invocation["kwargs"])
-        except Exception as exc:
-            failure = exc
-        # RETURNED still only means this callback returned. Ownership loss or an
-        # uncertain commit must be reconciled by the parent against the ledger.
-        self._ledger("finish", assignment, invocation["execution_token"], failure)
+        # The creator's trace context, then this attempt's span as its child
+        # (or a root when there is none, as for a schedule tick). Both cover the
+        # handler and the outcome write, so its log carries the trace too.
+        with (
+            restore_trace(invocation.get("trace")),
+            attempt_span(assignment.task_id, invocation) as span,
+        ):
+            try:
+                handler = resolve_handler(invocation["task_type"], None)
+                policy = resolve_policy(invocation["task_type"])
+                left = invocation.get("execution_seconds_left")
+                context = TaskContext(
+                    assignment.task_id,
+                    invocation["task_type"],
+                    invocation["attempts"],
+                    deadline=invocation.get("execution_deadline_at"),
+                    statement_timeout_s=policy.statement_timeout_s,
+                    lock_timeout_s=policy.lock_timeout_s,
+                    _stops_at=None if left is None else time.monotonic() + left,
+                )
+                with ExitStack() as stack:
+                    stack.enter_context(_bind_task(context))
+                    # A storage may prepare its framework for the handler (Django
+                    # applies the task's database budgets to its connection).
+                    scope = getattr(self.storage, "handler_scope", None)
+                    if scope is not None:
+                        stack.enter_context(scope(context))
+                    self.loop.invoke_handler(handler, *invocation["args"], **invocation["kwargs"])
+            except Exception as exc:
+                failure = exc
+                span.failed(exc)
+            # RETURNED still only means this callback returned. Ownership loss or an
+            # uncertain commit must be reconciled by the parent against the ledger.
+            self._ledger("finish", assignment, invocation["execution_token"], failure)
 
     def close(self) -> None:
         try:
             self.loop.invoke(self.close_resources)
         finally:
-            self.loop.close()
+            try:
+                # A multiprocessing child runs no atexit: export buffered spans now,
+                # within the time the worker gives this process to close.
+                flush_spans(self.flush_seconds)
+            finally:
+                self.loop.close()

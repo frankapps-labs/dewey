@@ -12,7 +12,7 @@ from django.db import IntegrityError, transaction
 from dewey._worker.ledger import tagged
 from dewey.context import TaskContext, _bind_task
 from dewey.core.backoff import BackoffFn
-from dewey.core.execution import classify_failure, resolve_handler
+from dewey.core.execution import classify_failure, log_outcome, resolve_handler
 from dewey.core.logging import (
     bind_to_metadata,
     extract_trace_context,
@@ -23,6 +23,7 @@ from dewey.core.ownership import new_execution_token
 from dewey.core.states import TaskStatus
 from dewey.core.types import TaskEntry as TaskEntryDC
 from dewey.core.validation import require_execution_timeout, require_timezone_aware
+from dewey.django.budgets import task_budgets
 from dewey.django.models import TaskEntry, resolve_db_alias
 from dewey.policy import resolve_policy
 from dewey.serialization import encode_args, encode_kwargs
@@ -68,6 +69,8 @@ def create_task(
         raise ValueError("expires_at must be a timezone-aware datetime")
     policy = resolve_policy(task_type)
     queue = policy.queue if queue is None else queue
+    if execution_timeout_s is None:
+        execution_timeout_s = policy.execution_timeout_s
     alias = resolve_db_alias(using)
     task = TaskEntry.objects.using(alias).create(
         task_type=task_type,
@@ -116,6 +119,8 @@ def create_or_get_task(
     resolved_queue = policy.queue if queue is None else queue
     resolved_priority = policy.priority if priority is None else priority
     resolved_max_attempts = policy.max_attempts if max_attempts is None else max_attempts
+    if execution_timeout_s is None:
+        execution_timeout_s = policy.execution_timeout_s
     expected = {
         "task_type": task_type,
         "args": encode_args(args),
@@ -288,7 +293,16 @@ def process_task(
     try:
         # Phase 2: Execute handler
         try:
-            with _bind_task(TaskContext(task_id, task_type, attempts)):
+            context = TaskContext(
+                task_id,
+                task_type,
+                attempts,
+                statement_timeout_s=policy.statement_timeout_s,
+                lock_timeout_s=policy.lock_timeout_s,
+            )
+            # The budgets the worker would apply: a handler tested inline runs
+            # under the same statement and lock timeouts as in production.
+            with _bind_task(context), task_budgets(alias, context):
                 resolve_handler(task_type, handler, policy=policy)(*task_args, **task_kwargs)
         except Exception as exc:
             # Phase 3a: Mark failed or dead-lettered
@@ -323,26 +337,20 @@ def process_task(
                 task.status = outcome.status.value
                 task.execution_token = None
 
-                if outcome.is_dead:
-                    logger.error(
-                        "Task dead-lettered id=%s type=%s attempts=%d reason=%s error=%s",
-                        task_id,
-                        task_type,
-                        attempts,
-                        outcome.reason,
-                        exc,
-                    )
-                else:
+                if not outcome.is_dead:
                     task.scheduled_for = outcome.retry_at
-                    logger.warning(
-                        "Task failed id=%s type=%s attempts=%d/%d retry_at=%s error=%s",
-                        task_id,
-                        task_type,
-                        attempts,
-                        max_attempts,
-                        outcome.retry_at,
-                        exc,
-                    )
+                log_outcome(
+                    logger,
+                    task_id=task_id,
+                    task_type=task_type,
+                    queue=task.queue,
+                    attempt=attempts,
+                    max_attempts=max_attempts,
+                    status=outcome.status,
+                    reason=outcome.reason,
+                    retry_at=outcome.retry_at,
+                    exc=exc,
+                )
 
                 task.save(
                     update_fields=[

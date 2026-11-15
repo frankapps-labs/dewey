@@ -65,15 +65,18 @@ def store(request, engine, django_db_blocker):
             storage = NativeDjangoStorage(
                 owner=owner, timing=timing, queues=["default"], using="native"
             )
+            close_resources = connections.close_all
         elif request.param == "async":
             async_engine = create_async_engine(os.environ["DEWEY_TEST_DATABASE_URL_ASYNC"])
             storage = AsyncNativeSQLAlchemyStorage(
                 async_sessionmaker(async_engine), owner=owner, timing=timing, queues=["default"]
             )
+            close_resources = lambda: bridge.invoke(async_engine.dispose)  # noqa: E731
         else:
             storage = NativeSQLAlchemyStorage(
                 sessionmaker(engine), owner=owner, timing=timing, queues=["default"]
             )
+            close_resources = engine.dispose
         try:
 
             def call(operation, *args):
@@ -82,6 +85,7 @@ def store(request, engine, django_db_blocker):
             call.storage = storage
             call.mode = request.param
             call.owner = owner
+            call.close_resources = close_resources  # what a factory would hand the worker
             yield call
         finally:
             if async_engine is not None:

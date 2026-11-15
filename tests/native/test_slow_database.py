@@ -56,6 +56,8 @@ def worker():
     ledger = SlowLedger()
     events, stopped, acknowledged = [], [], []
     pool = SimpleNamespace(
+        start_method="spawn",
+        prepare=None,
         concurrency=2,
         capacity=1,
         task_timeout_seconds=TIMING.task_timeout_seconds,

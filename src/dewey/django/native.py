@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import Callable, Sequence
+from contextlib import AbstractContextManager
 from datetime import timedelta
 from typing import Any
 
@@ -20,6 +20,7 @@ from dewey.context import TaskContext
 from dewey.core.heartbeat import DEFAULT_HEARTBEAT_RETENTION_DAYS, heartbeat_values
 from dewey.core.logging import extract_trace_context
 from dewey.core.states import TaskStatus
+from dewey.django.budgets import task_budgets
 from dewey.django.models import TaskEntry, WorkerHeartbeat, resolve_db_alias
 from dewey.django.schedules import DjangoScheduleStore
 from dewey.scheduling import create_due_ticks
@@ -143,13 +144,16 @@ class NativeDjangoStorage:
         self.apply(row, changes)
         if row.status != TaskStatus.PROCESSING.value:
             self.alerts.task_changed(row, row.latest_outcome)  # out of attempts: a dead letter
+            self.alerts.after_commit(ledger.outcome_log(row))
             return None
         return {
             "task_type": row.task_type,
+            "queue": row.queue,
             "args": list(row.args),
             "kwargs": dict(row.kwargs),
             "execution_token": row.execution_token,
             "attempts": row.attempts,
+            "max_attempts": row.max_attempts,
             "execution_timeout_s": row.execution_timeout_s,
             "execution_deadline_at": row.execution_deadline_at,
             "execution_seconds_left": ledger.seconds_left(row, now),
@@ -165,6 +169,7 @@ class NativeDjangoStorage:
             return False
         self.apply(row, changes)
         self.alerts.task_changed(row, row.latest_outcome)
+        self.alerts.after_commit(ledger.outcome_log(row, failure))
         return True
 
     def renew(self, assignment):
@@ -189,6 +194,7 @@ class NativeDjangoStorage:
             self.alerts.task_changed(
                 row, row.latest_outcome, recovered=row.latest_outcome != "abandoned"
             )
+            self.alerts.after_commit(ledger.outcome_log(row))
         return Reconciliation.SETTLED
 
     def reconcile(self, assignment):
@@ -221,6 +227,7 @@ class NativeDjangoStorage:
                 self.alerts.task_changed(
                     row, row.latest_outcome, recovered=row.latest_outcome != "abandoned"
                 )
+                self.alerts.after_commit(ledger.outcome_log(row))
         return recovered
 
     def report_invalid(self):
@@ -297,36 +304,9 @@ class NativeDjangoStorage:
             self.alerts.operation_done(name, result)
         return result
 
-    @contextmanager
-    def handler_scope(self, context: TaskContext) -> Iterator[None]:
+    def handler_scope(self, context: TaskContext) -> AbstractContextManager[None]:
         """Apply the task's database budgets to this alias while its handler runs."""
-        budgets = {
-            "statement_timeout": context.statement_timeout_s,
-            "lock_timeout": context.lock_timeout_s,
-        }
-        budgets = {name: seconds for name, seconds in budgets.items() if seconds is not None}
-        if not budgets:
-            yield
-            return
-        connection = connections[self.using]
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT " + ", ".join(f"current_setting('{name}')" for name in budgets))
-            previous = cursor.fetchone()
-            for name, seconds in budgets.items():
-                # set_config, not SET: SET takes no bound parameters.
-                cursor.execute(
-                    "SELECT set_config(%s, %s, false)", [name, f"{max(1, int(seconds * 1000))}ms"]
-                )
-        try:
-            yield
-        finally:
-            try:
-                with connection.cursor() as cursor:
-                    for name, value in zip(budgets, previous, strict=True):
-                        cursor.execute("SELECT set_config(%s, %s, false)", [name, value])
-            except Exception:
-                # The handler left the connection unusable; a fresh one starts clean.
-                connection.close()
+        return task_budgets(self.using, context)
 
     def call(self, operation: str, *args: Any) -> Any:
         allowed = {

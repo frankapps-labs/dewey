@@ -7,13 +7,14 @@ locking. These helpers never commit; their dictionaries are atomic write sets.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
 from dewey._worker.contracts import Reconciliation, Timing
 from dewey._worker.pool import Assignment
-from dewey.core.execution import classify_failure
+from dewey.core.execution import classify_failure, log_outcome
 from dewey.core.states import TaskStatus
 from dewey.core.validation import require_execution_timeout
 from dewey.policy import resolve_policy
@@ -27,6 +28,7 @@ OWNERSHIP_FIELDS = (
 CLEAR_NATIVE: dict[str, Any] = dict.fromkeys(OWNERSHIP_FIELDS)
 QUARANTINE_SCAN_LIMIT = 100
 logger = logging.getLogger(__name__)
+worker_log = logging.getLogger("dewey.worker")
 
 
 def tagged(row: Any) -> bool:
@@ -55,6 +57,37 @@ def report_invalid(row: Any) -> None:
         validate(row)
     except RuntimeError as exc:
         logger.warning("Native ownership quarantined: task_id=%s reason=%s", row.id, exc)
+
+
+def outcome_log(row: Any, failure: BaseException | None = None) -> Callable[[], None] | None:
+    """The log record for a row a settlement or recovery just left failed or dead.
+
+    Returns a callable for the storage's outbox, to run once the transaction
+    has committed: a change the database budget rolls back is logged by the
+    retry that commits it, not twice, and the log handler's own time stays
+    outside the budget. The values are captured now, since the row may be
+    expired after the commit. A task process has the handler's exception; the
+    worker parent recovering a lost execution has only the row. An operator's
+    kill is their own decision and is not logged as a failure.
+    """
+    if row.status not in (TaskStatus.FAILED.value, TaskStatus.DEAD.value):
+        return None
+    reason = row.latest_outcome or ""
+    if reason == "cancelled":
+        return None
+    if reason == "handler_failure":
+        reason = row.error or reason
+    fields = {
+        "task_id": str(row.id),
+        "task_type": row.task_type,
+        "queue": row.queue,
+        "attempt": row.attempts,
+        "max_attempts": row.max_attempts,
+        "status": row.status,
+        "reason": reason,
+        "retry_at": row.scheduled_for if row.status == TaskStatus.FAILED.value else None,
+    }
+    return lambda: log_outcome(worker_log, exc=failure, **fields)
 
 
 def owns(row: Any, assignment: Assignment, owner: str) -> bool:

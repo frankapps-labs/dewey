@@ -109,18 +109,22 @@ TASK_DEFAULTS  <  @dewey.task(...)  <  configure_policies(...)
   modules.
 
 Fields: `queue`, `priority`, `max_attempts`, `backoff`, `retry_on`, `fail_fast_on`,
-and the database budgets `statement_timeout_s` and `lock_timeout_s`. An unknown field is an error at declaration time, so `max_attemps=3`
-fails at import rather than silently doing nothing in production.
+the attempt's time limit `execution_timeout_s`, and the database budgets
+`statement_timeout_s` and `lock_timeout_s`. An unknown field is an error at
+declaration time, so `max_attemps=3` fails at import rather than silently doing
+nothing in production.
 
 The `handler` is never overridable by a later layer. Runtime database overrides are a
 deliberate future boundary: the resolver already takes layers in precedence order.
 
 ### Where the attempt budget lives
 
-`max_attempts` is stamped onto the row at creation, from the resolved policy. In-flight
-work therefore keeps the budget it was created with, even if policy changes under it.
-Backoff, by contrast, is read at failure time — so a timing change takes effect
-immediately, while a budget change applies to new work.
+`max_attempts` and `execution_timeout_s` are stamped onto the row at creation, from
+the resolved policy (a `create_task` argument overrides either for that task; a
+schedule's ticks get the values resolved when it was applied). In-flight work
+therefore keeps the budget and the time limit it was created with, even if policy
+changes under it. Backoff, by contrast, is read at failure time - so a timing change
+takes effect immediately, while a budget change applies to new work.
 
 ## Failure classification
 

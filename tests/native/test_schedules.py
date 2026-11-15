@@ -195,7 +195,9 @@ class TestPlanAndApply:
 
     def test_a_tick_uses_the_policy_resolved_when_it_was_applied(self, store, engine):
         try:
-            dewey.task("inventory.poll", queue="polls", priority=8, max_attempts=3)(lambda: None)
+            dewey.task(
+                "inventory.poll", queue="polls", priority=8, max_attempts=3, execution_timeout_s=90
+            )(lambda: None)
             dewey.schedule("poll", task="inventory.poll", when=dewey.every(minutes=1))
             apply(store)
         finally:
@@ -204,6 +206,7 @@ class TestPlanAndApply:
         store("tick")
         (row,) = tasks(engine, "inventory.poll")
         assert (row["queue"], row["priority"], row["max_attempts"]) == ("polls", 8, 3)
+        assert row["execution_timeout_s"] == 90
 
     def test_removal_touches_only_that_schedules_waiting_ticks(self, store, engine):
         dewey.schedule("poll", task="inventory.poll", when=dewey.every(minutes=1), catch_up="all")
