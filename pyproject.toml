@@ -74,19 +74,19 @@ wheel-smoke = [
     "psycopg2-binary==2.9.12",
 ]
 compat-py311-django52 = [
-    "Django==5.2.17; python_version == '3.11'",
+    "Django==5.2.19; python_version == '3.11'",
 ]
 compat-py312-django52 = [
-    "Django==5.2.17; python_version == '3.12'",
+    "Django==5.2.19; python_version == '3.12'",
 ]
 compat-py312-django60 = [
-    "Django==6.0.8; python_version == '3.12'",
+    "Django==6.0.10; python_version == '3.12'",
 ]
 compat-py313-django60 = [
-    "Django==6.0.8; python_version == '3.13'",
+    "Django==6.0.10; python_version == '3.13'",
 ]
 compat-py314-django60 = [
-    "Django==6.0.8; python_version == '3.14'",
+    "Django==6.0.10; python_version == '3.14'",
 ]
 dev = [
     "pytest>=7.0",

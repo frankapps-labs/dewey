@@ -62,23 +62,23 @@ jobs:
           # Django 5.2 lane guarding the oldest-Django/newer-Python resolver seam.
           - python-version: "3.11"
             compatibility-group: "compat-py311-django52"
-            expected-django: "5.2.17"
+            expected-django: "5.2.19"
             upload-coverage: false
           - python-version: "3.12"
             compatibility-group: "compat-py312-django52"
-            expected-django: "5.2.17"
+            expected-django: "5.2.19"
             upload-coverage: false
           - python-version: "3.12"
             compatibility-group: "compat-py312-django60"
-            expected-django: "6.0.8"
+            expected-django: "6.0.10"
             upload-coverage: true
           - python-version: "3.13"
             compatibility-group: "compat-py313-django60"
-            expected-django: "6.0.8"
+            expected-django: "6.0.10"
             upload-coverage: false
           - python-version: "3.14"
             compatibility-group: "compat-py314-django60"
-            expected-django: "6.0.8"
+            expected-django: "6.0.10"
             upload-coverage: false
 
     services:
