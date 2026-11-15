@@ -6,8 +6,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dewey"
-version = "0.5.3"
-description = "Guaranteed delivery engine for Python: Postgres is the scheduler and backlog, your broker is just a worker pool."
+version = "0.6.0"
+description = "Guaranteed task delivery for Python on Postgres: durable tasks, schedules and a worker, no broker."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -15,9 +15,9 @@ authors = [
     {name = "Frankapps", email = "hello@frankapps.com"}
 ]
 keywords = [
-    "task", "queue", "ledger", "guaranteed-delivery", "dispatcher",
-    "postgres", "sqlalchemy", "django", "huey",
-    "dead-letter", "retry", "backoff", "sweep",
+    "task", "queue", "ledger", "guaranteed-delivery", "worker", "scheduler", "cron",
+    "postgres", "sqlalchemy", "django",
+    "dead-letter", "retry", "backoff",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -33,9 +33,14 @@ classifiers = [
     "Typing :: Typed",
 ]
 
+[project.scripts]
+dewey = "dewey.cli:main"
+
 [project.optional-dependencies]
 sqlalchemy = [
-    "sqlalchemy>=2.0",
+    # [asyncio] brings greenlet, which SQLAlchemy 2.1 no longer installs by default
+    # and which importing dewey.sqlalchemy needs.
+    "sqlalchemy[asyncio]>=2.0",
 ]
 async = [
     "sqlalchemy[asyncio]>=2.0",
@@ -43,9 +48,6 @@ async = [
 ]
 django = [
     "Django>=5.2.17,<7",
-]
-huey = [
-    "huey>=3,<4",
 ]
 
 [dependency-groups]
@@ -70,27 +72,21 @@ audit = [
 ]
 wheel-smoke = [
     "psycopg2-binary==2.9.12",
-    "redis==8.1.0",
 ]
 compat-py311-django52 = [
     "Django==5.2.17; python_version == '3.11'",
-    "huey==3.0.0; python_version == '3.11'",
 ]
 compat-py312-django52 = [
     "Django==5.2.17; python_version == '3.12'",
-    "huey==3.0.0; python_version == '3.12'",
 ]
 compat-py312-django60 = [
     "Django==6.0.8; python_version == '3.12'",
-    "huey==3.0.0; python_version == '3.12'",
 ]
 compat-py313-django60 = [
     "Django==6.0.8; python_version == '3.13'",
-    "huey==3.0.0; python_version == '3.13'",
 ]
 compat-py314-django60 = [
     "Django==6.0.8; python_version == '3.14'",
-    "huey==3.0.0; python_version == '3.14'",
 ]
 dev = [
     "pytest>=7.0",
@@ -106,7 +102,6 @@ dev = [
     # Django 6 on Python 3.12+ when the consuming application does not constrain it.
     "Django>=5.2.17,<7",
     "psycopg2-binary>=2.9",
-    "huey>=3,<4",
     "PyYAML==6.0.3",
 ]
 
@@ -118,6 +113,10 @@ Repository = "https://github.com/frankapps-labs/dewey"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"dewey.dashboard" = ["assets/*.js", "assets/*.css", "assets/*.txt"]
+"dewey.django" = ["templates/dewey/*.html"]
 
 [tool.dependency-admission]
 project-package = "dewey"

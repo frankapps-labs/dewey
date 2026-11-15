@@ -3,6 +3,98 @@
 This changelog records the public Frankapps Dewey release lineage. Earlier versions under
 the `dewey` package name predate this lineage and are intentionally not represented here.
 
+## [0.6.0] - 2026-11-15
+
+Dewey now owns the runner and the clock as well as the ledger. One process type,
+`dewey run`, claims, executes, recovers and creates schedule ticks; there is no broker
+and no dispatcher. This is a breaking release: read
+[upgrading to 0.6](docs/upgrading-0.6.md) first.
+
+### Added
+
+- **The worker.** `dewey run --app module:factory` (`python manage.py dewey run` for
+  Django, with no factory) runs tasks from Postgres with one process per task, sync or
+  async handlers, on Django or SQLAlchemy sync/async storage. Claims are leases with
+  execution tokens: a worker that dies loses its leases and another worker retries the
+  work; a stale execution cannot overwrite a newer outcome. SIGTERM drains within
+  `shutdown_seconds`. Only the application factory is required; every limit has a
+  default sized from the concurrency. Workers claim only task types they have handlers
+  for, write a heartbeat, and must run inside a container or equivalent kill-all
+  boundary.
+- **Schedules.** `@dewey.task(..., schedule=dewey.cron("15 3 * * *", tz="Europe/London"))`
+  and `dewey.schedule(name, task=..., when=dewey.every(minutes=5), ...)` declare
+  schedules in code under their own name. Every tick becomes one ordinary task row,
+  created exactly once however many workers run, with the key `schedule:<name>:<tick>`.
+  Per schedule: `catch_up` (`once`, `skip`, `all`), `overlap` (`skip`, `allow`) and
+  `expire` (`next_tick`, `None`). The cron parser is dependency-free; wall-clock
+  schedules fire once across a daylight-saving gap or repeat, and all "is it due"
+  decisions use the database clock.
+- **Plan and apply.** `dewey schedules plan` shows what the code would change in the
+  schedule table (and exits 2 when it would); `dewey schedules apply` is the only
+  writer of definitions. Removal expires a schedule's unstarted ticks unless
+  `--keep-pending`. Workers report drift at startup; `auto_apply_schedules` lets a
+  single-node worker apply instead. `dewey schedules pause [--for 10m]` and `resume`.
+- **The `dewey` command and operations API.** `queues`, `tasks list|show|retry|kill`,
+  `dlq list|retry`, `workers`, `schedules ...` and `doctor`, each with `--json`.
+  `dewey.ops` exposes the same operations by name for Django and SQLAlchemy, returning
+  plain JSON-safe data. Arguments and error text are hidden unless revealed.
+- **Time limits.** Per-task `execution_timeout_s`, enforced by stopping the task
+  process; `dewey.current_task().deadline` and `.remaining()`; per-task
+  `statement_timeout_s` and `lock_timeout_s` in the task policy, applied to the Django
+  worker connection and available to SQLAlchemy handlers through
+  `apply_task_timeouts()`.
+- **Alerts.** `dewey.on_alert(hook)` (or `alert_hook="module:function"`) receives
+  `task_dead`, `execution_recovered`, `schedule_tick_missed` and
+  `worker_heartbeat_stale` events after the causing transaction commits.
+- **Trace context.** Task creation captures the ambient trace context, and an
+  OpenTelemetry `traceparent` when one is active; both are restored around the handler
+  and included in the pull-runner invocation. OpenTelemetry stays optional.
+- **Pull runners.** `dewey.runner` with `SQLAlchemyRunner`, `AsyncSQLAlchemyRunner`
+  and `DjangoRunner` lets a host gateway serve workers in other languages on the same
+  ledger: claim, start, renew, complete, fail, release, cooperative `request_cancel`,
+  `recover` and `tick`, inside the host's own transaction. Candidate protocol 1.
+- **Task context.** `dewey.current_task()` gives handlers their identity and stable
+  `effect_key(name)` values for deduplicating external effects across retries.
+- **Task history and retention.** Transactional outcome events per task, and an
+  optional, experimental Django admin overview with a diagnosed single retry and
+  completed-task retention controls. See [the admin overview](docs/dashboard.md).
+
+### Changed
+
+- Workers claim from a new index, `ix_task_claim`, one queue at a time, so the cost of
+  a claim no longer grows with the backlog.
+- A database too slow for `db_wait_seconds` pauses a worker instead of stopping it;
+  it stops only once its leases can no longer be trusted.
+- One maintenance round creates ticks for as many due schedules as fit in about one
+  database budget, not for a single batch of 20.
+- A task process that has just finished is no longer stopped and replaced when its
+  lease renewal races the report of its result.
+- A task whose type no worker has a handler for is now left unclaimed, not failed.
+- `process_task` is a test and eager-execution helper only; nothing recovers a row it
+  leaves behind.
+- Django settings are the worker's: `DATABASE`, `QUEUES`, `CONCURRENCY`,
+  `AUTODISCOVER`, `AUTO_APPLY_SCHEDULES`, `ALERT_HOOK`, `TIMING`. Unknown keys,
+  including the old dispatcher ones, are an error.
+- `get_dispatchers` is `get_workers`; the heartbeat types are `WorkerHeartbeat`. The
+  table keeps its name.
+- `manage.py dewey_doctor` is `manage.py dewey doctor`.
+
+### Removed
+
+- The Huey adapter, `dewey.adapters`, `dewey.contrib.django_huey` and the `huey` extra.
+- The dispatcher, its backends, `manage.py dewey_dispatcher` and LISTEN/NOTIFY
+  wake-ups. Task creation no longer issues `NOTIFY`.
+- The sweep functions; workers recover their own leases.
+
+### Upgrade
+
+- Stop the old dispatcher and broker workers, then migrate. Django migrations
+  `0003`-`0010` add ownership, history, retention, budgets, schedules and the claim
+  index, and `0008`
+  hands back rows the removed path left claimed. SQLAlchemy users apply the additive
+  SQL in [execution ownership](docs/execution-ownership.md) and
+  [upgrading to 0.6](docs/upgrading-0.6.md) and call `reset_legacy_claims()` once.
+
 ## [0.5.3] - 2026-09-19
 
 ### Security
@@ -142,6 +234,8 @@ PyPI already contains an unrelated historical 0.3.0 release.
 - Installed-wheel PostgreSQL/Redis/Huey smoke coverage plus multi-process claim tests for
   the packaged Django and SQLAlchemy paths.
 
+[0.6.0]: https://github.com/frankapps-labs/dewey/compare/v0.5.3...v0.6.0
+[0.5.3]: https://github.com/frankapps-labs/dewey/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/frankapps-labs/dewey/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/frankapps-labs/dewey/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/frankapps-labs/dewey/compare/v0.4.0...v0.5.0

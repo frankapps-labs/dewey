@@ -84,7 +84,7 @@ def test_django_5_2_is_supported_on_python_3_12():
     """
     project = pyproject()["project"]
     assert "django" in project["optional-dependencies"]
-    assert project["optional-dependencies"]["huey"] == ["huey>=3,<4"]
+    assert "huey" not in project["optional-dependencies"]
 
     project_config = pyproject()
     assert "compat-py312-django52" in project_config["dependency-groups"]

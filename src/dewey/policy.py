@@ -114,6 +114,8 @@ POLICY_FIELDS = frozenset(
         "backoff",
         "retry_on",
         "fail_fast_on",
+        "statement_timeout_s",
+        "lock_timeout_s",
     }
 )
 
@@ -122,10 +124,9 @@ POLICY_FIELDS = frozenset(
 class TaskPolicy:
     """The resolved behaviour of one task type.
 
-    Tier 1 only: execution routing, attempt budget, backoff, and failure
-    classification. Fairness, rate limits, timeouts, dedupe windows, lifecycle
-    hooks and safety metadata are deliberately absent from the first release —
-    see the project docs for what is deferred.
+    Execution routing, attempt budget, backoff, failure classification, the
+    attempt's time budget and its database timeouts. Fairness, rate limits,
+    dedupe windows, lifecycle hooks and safety metadata are deliberately absent.
     """
 
     task_type: str
@@ -144,6 +145,11 @@ class TaskPolicy:
     retry_on: tuple[type[BaseException], ...] = ()
     #: Exceptions that dead-letter immediately, ignoring remaining attempts.
     fail_fast_on: tuple[type[BaseException], ...] = (NonRetryableError,)
+
+    # Database budgets for the handler's own queries; None leaves the connection
+    # as the application configured it. See ``TaskContext.statement_timeout_s``.
+    statement_timeout_s: float | None = None
+    lock_timeout_s: float | None = None
 
     def is_retryable(self, exc: BaseException) -> bool:
         """Should ``exc`` be retried (attempt budget permitting)?"""
@@ -177,6 +183,18 @@ def _validate(task_type: str, overrides: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(value, int) or isinstance(value, bool) or value < 1:
             raise ValueError(
                 f"max_attempts for task {task_type!r} must be an int >= 1, got {value!r}"
+            )
+    for key in ("statement_timeout_s", "lock_timeout_s"):
+        value = overrides.get(key)
+        if value is not None and (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            # Postgres holds a timeout as 32-bit milliseconds (about 24 days).
+            or not 0 < value * 1000 <= 2**31 - 1
+        ):
+            raise ValueError(
+                f"{key} for task {task_type!r} must be a positive number of seconds, "
+                "at most 2147483"
             )
     for key in ("retry_on", "fail_fast_on"):
         if key in overrides and not isinstance(overrides[key], tuple):
@@ -269,11 +287,27 @@ def task(
         @dewey.task("agent.notify", max_attempts=5, backoff=dewey.Constant(3))
         def notify_agent(command_id: str) -> None:
             ...
+
+    ``schedule=dewey.cron(...)`` (or ``dewey.every(...)``) also declares a
+    schedule named after the task type, with the default policies; use
+    ``dewey.schedule`` for arguments or other policies.
     """
+    when = policy_kwargs.pop("schedule", None)
     overrides = _validate(task_type, dict(policy_kwargs))
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+        known = registry.get(task_type) is not None
         registry.register(replace(TASK_DEFAULTS, task_type=task_type, handler=fn, **overrides))
+        if when is not None:
+            from dewey.scheduling import schedule
+
+            try:
+                schedule(task_type, task=task_type, when=when)
+            except BaseException:
+                # A rejected declaration leaves nothing behind.
+                if not known:
+                    registry.unregister(task_type)
+                raise
         return fn
 
     return decorator
@@ -302,8 +336,7 @@ def resolve_policy(task_type: str) -> TaskPolicy:
     """Merge every layer into the effective policy for ``task_type``.
 
     An unregistered task type resolves to the defaults with no handler — the
-    row is still governed by policy, which is what lets the dispatcher and the
-    sweep treat unknown types as ordinary failures instead of crashing.
+    row is still governed by policy, so inspecting or retrying an unknown type never crashes.
     """
     declared = registry.get(task_type)
     policy = declared or replace(TASK_DEFAULTS, task_type=task_type)

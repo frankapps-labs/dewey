@@ -21,11 +21,11 @@ django.setup()
 from django.db import migrations as dj_migrations
 from django.db import models as dj_models
 
-from dewey.core.heartbeat import DispatcherHeartbeat as HeartbeatDC
+from dewey.core.heartbeat import WorkerHeartbeat as HeartbeatDC
 from dewey.core.states import TaskStatus
 from dewey.core.types import TaskEntry as TaskEntryDC
-from dewey.django.models import DispatcherHeartbeat, TaskEntry
-from dewey.sqlalchemy.models import DispatcherHeartbeatModel, TaskEntryModel
+from dewey.django.models import TaskEntry, WorkerHeartbeat
+from dewey.sqlalchemy.models import TaskEntryModel, WorkerHeartbeatModel
 
 MIGRATION_0002 = "0002_task_expiry_and_dispatcher_heartbeat"
 
@@ -167,37 +167,53 @@ class TestTaskEntryModelParity:
         assert dc.initial_scheduled_for == created
         assert dc.expired_at == deadline + timedelta(seconds=1)
 
-    def test_to_dataclass_and_model_share_one_field_set(self):
-        """A field added to either side without the other fails here."""
+    def test_to_dataclass_and_model_share_the_public_field_set(self):
+        """Native ownership/outcome metadata remains internal, not a result API."""
         dataclass_fields = {f.name for f in dataclasses.fields(TaskEntryDC)}
         model_fields = {f.name for f in TaskEntry._meta.concrete_fields}
-        assert dataclass_fields == model_fields
+        internal = {
+            "execution_token",
+            "dispatch_token",
+            "worker_id",
+            "lease_expires_at",
+            "execution_deadline_at",
+            "latest_outcome",
+            "cancel_requested",
+        }
+        assert dataclass_fields == model_fields - internal
+        assert not internal.intersection(dataclass_fields)
+
+    def test_execution_token_is_nullable_internal_identity(self):
+        field = TaskEntry._meta.get_field("execution_token")
+        assert field.null is True
+        assert field.editable is False
+        assert field.max_length == 36
 
 
-class TestDispatcherHeartbeatModelParity:
+class TestWorkerHeartbeatModelParity:
     def test_table_name(self):
-        assert DispatcherHeartbeat._meta.db_table == "dewey_dispatcher_heartbeats"
+        assert WorkerHeartbeat._meta.db_table == "dewey_dispatcher_heartbeats"
 
     def test_primary_key_is_instance_id(self):
-        assert DispatcherHeartbeat._meta.pk.name == "instance_id"
+        assert WorkerHeartbeat._meta.pk.name == "instance_id"
 
     def test_fields_match_the_framework_free_contract(self):
-        model_fields = {f.name for f in DispatcherHeartbeat._meta.concrete_fields}
+        model_fields = {f.name for f in WorkerHeartbeat._meta.concrete_fields}
         contract_fields = {f.name for f in dataclasses.fields(HeartbeatDC)}
         assert model_fields == contract_fields
 
     def test_columns_match_the_sqlalchemy_table(self):
-        django_columns = {f.column for f in DispatcherHeartbeat._meta.concrete_fields}
-        sqlalchemy_columns = {c.name for c in DispatcherHeartbeatModel.__table__.columns}
+        django_columns = {f.column for f in WorkerHeartbeat._meta.concrete_fields}
+        sqlalchemy_columns = {c.name for c in WorkerHeartbeatModel.__table__.columns}
         assert django_columns == sqlalchemy_columns
 
     def test_queues_is_nullable_json(self):
-        field = DispatcherHeartbeat._meta.get_field("queues")
+        field = WorkerHeartbeat._meta.get_field("queues")
         assert isinstance(field, dj_models.JSONField)
         assert field.null is True
 
     def test_bounded_use_indexes(self):
-        indexes = {idx.name: idx for idx in DispatcherHeartbeat._meta.indexes}
+        indexes = {idx.name: idx for idx in WorkerHeartbeat._meta.indexes}
         assert indexes["ix_heartbeat_last_seen"].fields == ["last_seen_at"]
         assert indexes["ix_heartbeat_backend_db"].fields == ["backend", "database"]
 
@@ -240,7 +256,8 @@ class TestMigration0002Reversibility:
                 assert cursor.fetchone() == (TaskStatus.DEAD.value,)
         finally:
             executor.loader.build_graph()
-            executor.migrate([("dewey", MIGRATION_0002)])
+            # Restore current model compatibility, not only this historical revision.
+            executor.migrate(executor.loader.graph.leaf_nodes("dewey"))
 
         columns = task_columns()
         assert {"expires_at", "initial_scheduled_for", "expired_at"} <= columns

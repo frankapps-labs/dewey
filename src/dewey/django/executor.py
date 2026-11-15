@@ -9,25 +9,28 @@ from typing import Any
 
 from django.db import IntegrityError, transaction
 
+from dewey._worker.ledger import tagged
+from dewey.context import TaskContext, _bind_task
 from dewey.core.backoff import BackoffFn
 from dewey.core.execution import classify_failure, resolve_handler
 from dewey.core.logging import (
+    bind_to_metadata,
     extract_trace_context,
     reset_trace_context,
     set_trace_context,
 )
+from dewey.core.ownership import new_execution_token
 from dewey.core.states import TaskStatus
 from dewey.core.types import TaskEntry as TaskEntryDC
-from dewey.core.validation import require_timezone_aware
-from dewey.django.listen import notify_work_available
+from dewey.core.validation import require_execution_timeout, require_timezone_aware
 from dewey.django.models import TaskEntry, resolve_db_alias
 from dewey.policy import resolve_policy
 from dewey.serialization import encode_args, encode_kwargs
 
 logger = logging.getLogger(__name__)
 
-# States a worker may claim from. PENDING covers in-process execution with no
-# broker in the path; DISPATCHING covers the normal dispatcher-driven flow.
+# States inline ``process_task`` may claim from. Workers claim through the
+# native ledger instead; this path exists for tests and eager execution.
 _CLAIMABLE = (TaskStatus.PENDING, TaskStatus.DISPATCHING)
 
 # Task handler: invoked as handler(*args, **kwargs) with the decoded task arguments.
@@ -44,6 +47,7 @@ def create_task(
     max_attempts: int | None = None,
     scheduled_for: datetime | None = None,
     expires_at: datetime | None = None,
+    execution_timeout_s: float | None = None,
     idempotency_key: str | None = None,
     metadata: dict[str, Any] | None = None,
     using: str | None = None,
@@ -51,16 +55,15 @@ def create_task(
     """
     Write a task to the ledger. This is step 1 — Postgres is the source of truth.
 
-    The dispatcher picks the row up from Postgres — producers never talk to a
-    broker.
+    A worker claims the row from Postgres; producers talk to nothing else.
 
     ``using`` pins the write to a database alias; when omitted, the project's
-    routers decide, as with any ORM write. The NOTIFY goes on the same alias, so
-    the row and its wake-up stay in one transaction.
+    routers decide, as with any ORM write.
 
     Returns a TaskEntry dataclass (with .id).
     """
     require_timezone_aware(scheduled_for, "scheduled_for")
+    require_execution_timeout(execution_timeout_s)
     if expires_at is not None and expires_at.utcoffset() is None:
         raise ValueError("expires_at must be a timezone-aware datetime")
     policy = resolve_policy(task_type)
@@ -70,20 +73,16 @@ def create_task(
         task_type=task_type,
         args=encode_args(args),
         kwargs=encode_kwargs(kwargs),
-        metadata=metadata or {},
+        metadata=bind_to_metadata(metadata),
         queue=queue,
         priority=policy.priority if priority is None else priority,
         max_attempts=policy.max_attempts if max_attempts is None else max_attempts,
         scheduled_for=scheduled_for,
         initial_scheduled_for=scheduled_for,
         expires_at=expires_at,
+        execution_timeout_s=execution_timeout_s,
         idempotency_key=idempotency_key,
     )
-
-    # Postgres holds the NOTIFY until this transaction commits, so a rollback
-    # cannot wake a dispatcher for a row that does not exist. That guarantee
-    # only holds on the connection that wrote the row — hence the same alias.
-    notify_work_available(kind="task", entry_id=str(task.id), queue=queue, using=alias)
 
     logger.info("Task created id=%s type=%s queue=%s", task.id, task_type, queue)
     return task.to_dataclass()
@@ -100,12 +99,14 @@ def create_or_get_task(
     max_attempts: int | None = None,
     scheduled_for: datetime | None = None,
     expires_at: datetime | None = None,
+    execution_timeout_s: float | None = None,
     metadata: dict[str, Any] | None = None,
     using: str | None = None,
 ) -> TaskEntryDC:
     """Create once, or return the identical existing task without aborting the caller."""
     from dewey.errors import IdempotencyConflictError
 
+    require_execution_timeout(execution_timeout_s)
     if not idempotency_key:
         raise ValueError("create_or_get_task requires a non-empty idempotency_key")
     require_timezone_aware(scheduled_for, "scheduled_for")
@@ -124,6 +125,7 @@ def create_or_get_task(
         "max_attempts": resolved_max_attempts,
         "scheduled_for": scheduled_for,
         "expires_at": expires_at,
+        "execution_timeout_s": execution_timeout_s,
     }
     alias = resolve_db_alias(using)
     with transaction.atomic(using=alias):
@@ -138,6 +140,7 @@ def create_or_get_task(
                     max_attempts=resolved_max_attempts,
                     scheduled_for=scheduled_for,
                     expires_at=expires_at,
+                    execution_timeout_s=execution_timeout_s,
                     idempotency_key=idempotency_key,
                     metadata=metadata,
                     using=alias,
@@ -159,6 +162,7 @@ def create_or_get_task(
                 "max_attempts": existing.max_attempts,
                 "scheduled_for": existing.initial_scheduled_for,
                 "expires_at": existing.expires_at,
+                "execution_timeout_s": existing.execution_timeout_s,
             }
             differing = tuple(name for name, value in expected.items() if actual[name] != value)
             if differing:
@@ -186,12 +190,13 @@ def process_task(
 
     Two-phase commit:
 
-    Phase 1: PENDING/DISPATCHING → PROCESSING (committed — visible to sweep)
+    Phase 1: PENDING/DISPATCHING → PROCESSING (committed)
     Phase 2: Run handler
     Phase 3: PROCESSING → COMPLETED/FAILED/DEAD (committed)
 
-    If the process dies during phase 2, the task stays PROCESSING and
-    sweep_stuck will reset it to PENDING.
+    A test and eager-execution helper, not a production path: no worker owns the
+    row, so if the process dies during phase 2 the task stays PROCESSING and
+    nothing recovers it. Production work runs under ``dewey run``.
 
     Uses SELECT FOR UPDATE to prevent concurrent processing.
 
@@ -216,14 +221,16 @@ def process_task(
         now = datetime.now(UTC)
         current_status = TaskStatus(task.status)
 
+        # Native assignments require generation-validated admission.
+        if tagged(task):
+            return False
+
         # Already processed or dead — skip
         if current_status.is_terminal:
             logger.info("Task already terminal id=%s status=%s", task_id, task.status)
             return False
 
-        # Claimable from PENDING (in-process execution, no broker in the path) or
-        # DISPATCHING (a dispatcher already handed this ID to the transport).
-        # Anything else means another worker got there first, or an operator
+        # Claimable from PENDING or an unowned DISPATCHING row. Anything else means another worker got there first, or an operator
         # intervened — a duplicate delivery is a logged no-op, never an error.
         if current_status not in _CLAIMABLE:
             logger.info("Task not claimable id=%s status=%s", task_id, task.status)
@@ -252,8 +259,16 @@ def process_task(
         task.started_at = now
         task.dispatching_at = None
         task.attempts += 1
+        task.execution_token = new_execution_token()
         task.save(
-            update_fields=["status", "started_at", "dispatching_at", "attempts", "updated_at"]
+            update_fields=[
+                "status",
+                "started_at",
+                "dispatching_at",
+                "attempts",
+                "execution_token",
+                "updated_at",
+            ]
         )
 
     # Cache values (task object still usable after atomic block exits)
@@ -261,6 +276,7 @@ def process_task(
     task_args = list(task.args or [])
     task_kwargs = dict(task.kwargs or {})
     attempts = task.attempts
+    execution_token = task.execution_token
     max_attempts = task.max_attempts
     task_metadata = dict(task.metadata or {})
     policy = resolve_policy(task_type)
@@ -272,7 +288,8 @@ def process_task(
     try:
         # Phase 2: Execute handler
         try:
-            resolve_handler(task_type, handler, policy=policy)(*task_args, **task_kwargs)
+            with _bind_task(TaskContext(task_id, task_type, attempts)):
+                resolve_handler(task_type, handler, policy=policy)(*task_args, **task_kwargs)
         except Exception as exc:
             # Phase 3a: Mark failed or dead-lettered
             error_msg = str(exc)
@@ -284,11 +301,11 @@ def process_task(
                     logger.warning("Task disappeared during processing id=%s", task_id)
                     return False
 
-                # Task was killed mid-processing — respect the kill
+                # A recovered/operator-reset row may already belong to a newer execution.
                 current = TaskStatus(task.status)
-                if current != TaskStatus.PROCESSING:
+                if current != TaskStatus.PROCESSING or task.execution_token != execution_token:
                     logger.info(
-                        "Task status changed during processing id=%s status=%s, skipping update",
+                        "Task state or ownership changed id=%s status=%s, skipping update",
                         task_id,
                         task.status,
                     )
@@ -304,6 +321,7 @@ def process_task(
                     backoff=backoff,
                 )
                 task.status = outcome.status.value
+                task.execution_token = None
 
                 if outcome.is_dead:
                     logger.error(
@@ -326,7 +344,15 @@ def process_task(
                         exc,
                     )
 
-                task.save(update_fields=["status", "error", "scheduled_for", "updated_at"])
+                task.save(
+                    update_fields=[
+                        "status",
+                        "error",
+                        "scheduled_for",
+                        "execution_token",
+                        "updated_at",
+                    ]
+                )
 
             return False
 
@@ -338,20 +364,23 @@ def process_task(
                 logger.warning("Task disappeared during processing id=%s", task_id)
                 return False
 
-            # Task was killed mid-processing — respect the kill
+            # Status alone cannot distinguish this execution from a newer one.
             current = TaskStatus(task.status)
-            if current != TaskStatus.PROCESSING:
+            if current != TaskStatus.PROCESSING or task.execution_token != execution_token:
                 logger.info(
-                    "Task status changed during processing id=%s status=%s, skipping update",
+                    "Task state or ownership changed id=%s status=%s, skipping update",
                     task_id,
                     task.status,
                 )
                 return False
 
             task.status = TaskStatus.COMPLETED.value
+            task.execution_token = None
             task.completed_at = datetime.now(UTC)
             task.error = ""
-            task.save(update_fields=["status", "completed_at", "error", "updated_at"])
+            task.save(
+                update_fields=["status", "completed_at", "error", "execution_token", "updated_at"]
+            )
 
         logger.info("Task completed id=%s type=%s", task_id, task_type)
         return True

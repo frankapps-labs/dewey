@@ -17,7 +17,7 @@ def _postgresql(alias: str) -> bool:
 
 @register()
 def check_dewey_configuration(app_configs=None, **kwargs):
-    from dewey.django.conf import get_dispatch_fn, get_settings
+    from dewey.django.conf import get_settings
     from dewey.django.models import TaskEntry
 
     findings = []
@@ -27,14 +27,7 @@ def check_dewey_configuration(app_configs=None, **kwargs):
         return [Error(str(exc), id="dewey.E001")]
 
     producer_alias = router.db_for_write(TaskEntry)
-    aliases = {
-        "producer": producer_alias,
-        "dispatcher": config["DATABASE"],
-        "worker": config["WORKER_DATABASE"],
-    }
-    for role, alias in aliases.items():
-        if alias is None:
-            continue
+    for role, alias in {"producer": producer_alias, "worker": config["DATABASE"]}.items():
         if not isinstance(alias, str) or alias not in settings.DATABASES:
             findings.append(
                 Error(
@@ -50,61 +43,21 @@ def check_dewey_configuration(app_configs=None, **kwargs):
                 )
             )
 
-    if not config["DISPATCH"]:
+    queues = config["QUEUES"]
+    if isinstance(queues, str) or not queues or any(not isinstance(q, str) for q in queues):
         findings.append(
-            Warning(
-                "DEWEY['DISPATCH'] is not set; producers can migrate/create rows, but "
-                "a dispatcher cannot start until a module-level callable is configured.",
-                id="dewey.W003",
-            )
-        )
-    else:
-        try:
-            get_dispatch_fn()
-        except Exception as exc:
-            findings.append(Error(str(exc), id="dewey.E004"))
-
-    sweep_interval = config["SWEEP_INTERVAL_SECONDS"]
-    if sweep_interval is None:
-        findings.append(
-            Warning(
-                "Dewey recovery sweeps are disabled; crash recovery requires another runner.",
-                id="dewey.W001",
-            )
-        )
-    elif not isinstance(sweep_interval, (int, float)) or sweep_interval <= 0:
-        findings.append(
-            Error(
-                "DEWEY['SWEEP_INTERVAL_SECONDS'] must be a positive number or None.",
-                id="dewey.E005",
-            )
+            Error("DEWEY['QUEUES'] must be a nonempty list of queue names.", id="dewey.E004")
         )
 
-    dispatcher_alias = config["DATABASE"]
-    if producer_alias == dispatcher_alias and dispatcher_alias != "default":
+    if producer_alias != config["DATABASE"]:
         findings.append(
             Warning(
-                "A database router sends producer TaskEntry writes to the dispatcher alias. "
-                "This splits task creation from business transactions on another alias; "
-                "pass using= for the business transaction or change the router.",
+                f"Producers write tasks to alias {producer_alias!r} but the worker reads "
+                f"{config['DATABASE']!r}. Unless both point at the same database, created "
+                "tasks are never claimed.",
                 id="dewey.W002",
             )
         )
-
-    dispatch_path = config["DISPATCH"]
-    if dispatch_path == "dewey.contrib.django_huey.dispatch":
-        try:
-            from dewey.contrib.django_huey import adapter
-
-            if adapter._process_task is None:
-                raise RuntimeError("Dewey's Huey processor is not registered")
-        except Exception as exc:
-            findings.append(
-                Error(
-                    f"Dewey Django/Huey contrib wiring is incomplete: {exc}",
-                    id="dewey.E006",
-                )
-            )
 
     return findings
 

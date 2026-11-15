@@ -20,7 +20,7 @@ make dependency-check
 make lint typecheck format-check test
 ```
 
-CI additionally runs the supported Python/Django/Huey matrix, installed-wheel smoke,
+CI additionally runs the supported Python/Django matrix, installed-wheel smoke,
 optional-extra imports, runtime vulnerability audit, CodeQL, and workflow checks.
 
 Before approval, review the dependency inventory and answer:

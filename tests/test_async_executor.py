@@ -71,7 +71,7 @@ async def test_create_task_with_metadata(async_session):
 
 
 # --- scheduled_for validation ---
-# Naive scheduled_for fails fast — exact error, no row written, no NOTIFY sent.
+# Naive scheduled_for fails fast — exact error, no row written.
 
 _AWARE_OR_NONE_SCHEDULES = pytest.mark.parametrize(
     "scheduled_for",
@@ -84,33 +84,20 @@ _AWARE_OR_NONE_SCHEDULES = pytest.mark.parametrize(
 )
 
 
-def _spy_notifications(monkeypatch):
-    notifications = []
-
-    async def spy(*args, **kwargs):
-        notifications.append((args, kwargs))
-
-    monkeypatch.setattr(executor_module, "notify_work_available_async", spy)
-    return notifications
-
-
 async def _count_tasks(session):
     return await session.scalar(select(func.count()).select_from(TaskEntryModel))
 
 
 @pytest.mark.asyncio
-async def test_create_task_rejects_naive_scheduled_for(async_session, monkeypatch):
-    notifications = _spy_notifications(monkeypatch)
+async def test_create_task_rejects_naive_scheduled_for(async_session):
     with pytest.raises(ValueError) as excinfo:
         await create_task_async(async_session, task_type="scan", scheduled_for=datetime.now())
     assert str(excinfo.value) == "scheduled_for must be a timezone-aware datetime"
-    assert notifications == []
     assert await _count_tasks(async_session) == 0
 
 
 @pytest.mark.asyncio
-async def test_create_or_get_task_rejects_naive_scheduled_for(async_session, monkeypatch):
-    notifications = _spy_notifications(monkeypatch)
+async def test_create_or_get_task_rejects_naive_scheduled_for(async_session):
     with pytest.raises(ValueError) as excinfo:
         await create_or_get_task_async(
             async_session,
@@ -119,7 +106,6 @@ async def test_create_or_get_task_rejects_naive_scheduled_for(async_session, mon
             scheduled_for=datetime.now(),
         )
     assert str(excinfo.value) == "scheduled_for must be a timezone-aware datetime"
-    assert notifications == []
     assert await _count_tasks(async_session) == 0
 
 
@@ -302,7 +288,6 @@ async def test_process_task_respects_scheduled_for(async_session):
 
 @pytest.mark.asyncio
 async def test_deadline_is_checked_after_the_task_lock_is_acquired(async_session, monkeypatch):
-    import dewey.sqlalchemy.async_executor as executor_module
 
     before = datetime.now(UTC)
     deadline = before + timedelta(minutes=1)

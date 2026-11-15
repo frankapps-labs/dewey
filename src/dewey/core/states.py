@@ -7,9 +7,8 @@ class TaskStatus(str, Enum):  # noqa: UP042 — keeping (str, Enum) intentional;
     """Task lifecycle states."""
 
     PENDING = "pending"
-    #: Claimed by a dispatcher and handed to the transport, but not yet picked up
-    #: by a worker. A row that sits here past the dispatch timeout is reclaimed by
-    #: the sweep — that is what makes a dispatcher crash survivable.
+    #: Assigned to a worker under a lease, but not yet started in a task process.
+    #: An assignment whose lease expires is recovered without consuming an attempt.
     DISPATCHING = "dispatching"
     PROCESSING = "processing"
     COMPLETED = "completed"
@@ -21,7 +20,7 @@ class TaskStatus(str, Enum):  # noqa: UP042 — keeping (str, Enum) intentional;
 
     @property
     def is_terminal(self) -> bool:
-        """Terminal for auto-processing — sweep and process_task skip these.
+        """Terminal for auto-processing — workers never claim these.
 
         Note: DEAD is terminal but allows manual retry (DEAD → PENDING).
         COMPLETED and EXPIRED are fully terminal — no transitions out.
@@ -38,22 +37,22 @@ _TERMINAL_STATES = {TaskStatus.COMPLETED, TaskStatus.DEAD, TaskStatus.EXPIRED}
 
 _ALLOWED_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
     TaskStatus.PENDING: {
-        TaskStatus.DISPATCHING,  # a dispatcher claimed it
-        TaskStatus.PROCESSING,  # in-process execution, with no broker in the path
+        TaskStatus.DISPATCHING,  # a worker was assigned it
+        TaskStatus.PROCESSING,  # inline execution (tests), no assignment step
         TaskStatus.DEAD,  # manual kill
         TaskStatus.EXPIRED,  # deadline passed before dispatch
     },
     TaskStatus.DISPATCHING: {
-        TaskStatus.PROCESSING,  # a worker picked it up off the transport
-        TaskStatus.PENDING,  # dispatch failed, or the dispatch timeout swept it
+        TaskStatus.PROCESSING,  # the task process admitted the attempt
+        TaskStatus.PENDING,  # released, or the assignment lease expired
         TaskStatus.DEAD,  # manual kill, or attempts exhausted while stuck
-        TaskStatus.EXPIRED,  # deadline passed while on the transport
+        TaskStatus.EXPIRED,  # deadline passed before it started
     },
     TaskStatus.PROCESSING: {
         TaskStatus.COMPLETED,
         TaskStatus.FAILED,
         TaskStatus.DEAD,
-        TaskStatus.PENDING,  # sweep_stuck resets abandoned tasks
+        TaskStatus.PENDING,  # recovered after its worker's lease expired
     },
     TaskStatus.FAILED: {
         TaskStatus.PENDING,

@@ -1,0 +1,92 @@
+/* Semantic, scoped tokens: one UI inherits the host's light/dark selection. */
+.dw-root { --dw-bg:#fafafa; --dw-panel:#fff; --dw-line:#e4e4e7; --dw-text:#18181b; --dw-muted:#71717a; --dw-accent:#7c3aed; --dw-soft:#f5f3ff; --dw-danger:#be123c; --dw-danger-bg:#fff1f2; --dw-good:#047857; --dw-good-bg:#ecfdf5; --dw-warn:#b45309; --dw-warn-bg:#fffbeb; color:var(--dw-text); background:var(--dw-bg); padding:24px; border-radius:12px; color-scheme:light; font-family:Inter,ui-sans-serif,system-ui,sans-serif; font-size:14px; line-height:1.5; }
+.dw-root[data-resolved-theme=dark] { --dw-bg:#09090b; --dw-panel:#18181b; --dw-line:#27272a; --dw-text:#fafafa; --dw-muted:#a1a1aa; --dw-accent:#c4b5fd; --dw-soft:#302147; --dw-danger:#fda4af; --dw-danger-bg:#4c1d2d; --dw-good:#6ee7b7; --dw-good-bg:#13362c; --dw-warn:#fcd34d; --dw-warn-bg:#3e2c13; color-scheme:dark; }
+.dw-root, .dw-root * { box-sizing:border-box; }
+.dw-root h1,.dw-root h2,.dw-root p,.dw-root dl { padding:0; margin:0 0 12px; color:inherit; }
+.dw-root h1 { font-size:28px; font-weight:650; }
+.dw-root h2 { font-size:15px; font-weight:600; }
+.dw-root code { display:block; font-size:11px; overflow-wrap:anywhere; color:var(--dw-muted); background:transparent; }
+.dw-root .dw-muted { color:var(--dw-muted); font-size:12px; }
+.dw-header { display:flex; justify-content:space-between; align-items:start; gap:20px; }
+.dw-tabs { display:flex; gap:24px; border-bottom:1px solid var(--dw-line); margin:16px 0 24px; }
+.dw-root .dw-tabs button { padding:10px 0; border:0; border-bottom:2px solid transparent; background:transparent; border-radius:0; }
+.dw-root .dw-tabs button[aria-current=page] { color:var(--dw-accent); border-bottom-color:var(--dw-accent); }
+.dw-controls,.dw-filters,.dw-paging { display:flex; flex-wrap:wrap; gap:12px; align-items:end; margin-bottom:20px; }
+.dw-root label { display:flex; flex-direction:column; gap:4px; color:var(--dw-muted); font-size:12px; }
+.dw-root input,.dw-root select,.dw-root button { font:inherit; font-size:13px; color:var(--dw-text); background:var(--dw-panel); border:1px solid var(--dw-line); border-radius:6px; padding:8px 12px; max-width:100%; }
+/* Django fixes select height at 30px: reset it so padding cannot clip the text. */
+.dw-root select { height:auto; min-height:38px; line-height:1.5; appearance:auto; }
+.dw-root select:disabled { cursor:default; opacity:.55; }
+.dw-root button { cursor:pointer; }
+.dw-root button:disabled { cursor:default; opacity:.45; }
+.dw-root button:hover:not(:disabled) { border-color:var(--dw-accent); }
+.dw-root :focus-visible { outline:2px solid var(--dw-accent); outline-offset:3px; }
+.dw-root .dw-link { color:var(--dw-accent); background:transparent; border:0; text-align:left; padding:0; overflow-wrap:anywhere; }
+.dw-notice { color:var(--dw-muted); font-size:12px; min-height:18px; }
+.dw-cards { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; margin-bottom:24px; }
+.dw-card,.dw-panel { background:var(--dw-panel); border:1px solid var(--dw-line); border-radius:10px; padding:18px; min-width:0; }
+.dw-card h2 { color:var(--dw-muted); font-size:12px; font-weight:400; margin-bottom:10px; }
+.dw-card strong { display:block; font-size:28px; margin-bottom:6px; }
+.dw-card small { color:var(--dw-muted); font-size:10px; }
+.dw-danger strong { color:var(--dw-danger); }
+.dw-grid { display:grid; grid-template-columns:minmax(0,2fr) minmax(240px,1fr); gap:20px; margin-bottom:24px; align-items:start; }
+.dw-table-wrap { max-width:100%; overflow-x:auto; }
+.dw-root table { width:100%; border-collapse:collapse; background:transparent; }
+.dw-root th,.dw-root td { padding:12px 8px; border:0; border-bottom:1px solid var(--dw-line); text-align:left; font-size:12px; background:transparent; color:var(--dw-text); vertical-align:top; }
+.dw-root th { color:var(--dw-muted); font-size:11px; font-weight:500; white-space:nowrap; }
+.dw-root tbody tr:last-child td { border-bottom:0; }
+.dw-root tr.dw-selected td { background:var(--dw-soft); }
+.dw-root button[data-task-id][aria-current=true] { font-weight:650; }
+.dw-badge { display:inline-block; background:var(--dw-soft); color:var(--dw-accent); padding:4px 9px; border-radius:6px; font-size:11px; white-space:nowrap; }
+.dw-completed { background:var(--dw-good-bg); color:var(--dw-good); }
+.dw-dead,.dw-error { background:var(--dw-danger-bg); color:var(--dw-danger); }
+.dw-pending,.dw-failed { background:var(--dw-warn-bg); color:var(--dw-warn); }
+.dw-expired { background:var(--dw-line); color:var(--dw-muted); }
+.dw-error { padding:12px; border-radius:6px; overflow-wrap:anywhere; }
+.dw-owner { padding:12px 0; border-bottom:1px solid var(--dw-line); }
+.dw-owner p { margin:4px 0; font-size:12px; }
+.dw-field { display:grid; grid-template-columns:100px minmax(0,1fr); gap:12px; padding:8px 0; }
+.dw-field dt { color:var(--dw-muted); font-size:12px; }
+.dw-field dd { margin:0; font-size:12px; overflow-wrap:anywhere; }
+.dw-panel > dl { margin-top:18px; }
+.dw-panel > code { margin-top:12px; }
+.dw-paging { margin:20px 0 0; }
+.dw-task-grid { grid-template-columns:minmax(0,1fr) minmax(340px,1fr); }
+.dw-task-grid table { min-width:560px; }
+.dw-task-grid th:first-child,.dw-task-grid td:first-child { min-width:170px; }
+.dw-root h3 { font-size:18px; margin:20px 0 8px; color:var(--dw-text); }
+.dw-root h4 { font-size:12px; margin:18px 0 6px; color:var(--dw-muted); }
+.dw-recovery { margin:18px 0 24px; padding:18px; border:1px solid var(--dw-line); border-left:3px solid var(--dw-accent); border-radius:8px; }
+.dw-recovery h3 { margin-top:0; }
+.dw-recovery-good { border-left-color:var(--dw-good); }
+.dw-recovery-waiting { border-left-color:var(--dw-warn); }
+.dw-recovery-attention { border-left-color:var(--dw-danger); }
+.dw-root .dw-timeline { list-style:none; padding:0 0 0 16px; margin:18px 0 24px; border-left:2px solid var(--dw-line); }
+.dw-timeline li { padding:0 0 18px 4px; position:relative; }
+.dw-timeline li::before { content:""; position:absolute; left:-22px; top:6px; width:10px; height:10px; border:2px solid var(--dw-panel); border-radius:50%; background:var(--dw-accent); }
+.dw-timeline time { display:block; font-size:11px; color:var(--dw-muted); margin:4px 0; }
+.dw-technical { border-top:1px solid var(--dw-line); padding:16px 0; }
+.dw-root summary { cursor:pointer; }
+.dw-root .dw-recovery p { overflow-wrap:anywhere; }
+.dw-note { margin-top:8px!important; }
+@media(max-width:1000px) { .dw-grid { grid-template-columns:1fr; } }
+@media(max-width:640px) { .dw-root { padding:14px; } .dw-cards { grid-template-columns:repeat(2,minmax(0,1fr)); } .dw-filters label { width:100%; } .dw-filters input { width:100%; } }
+
+.dw-outcomes { margin-bottom:24px; }
+.dw-outcome-totals { display:flex; flex-wrap:wrap; gap:32px; margin:0 0 14px; }
+.dw-outcome-total { display:flex; align-items:baseline; gap:12px; font-size:12px; }
+.dw-outcome-total strong { font-size:24px; }
+.dw-outcome-completed { color:var(--dw-good); }
+.dw-outcome-dead { color:var(--dw-danger); }
+.dw-chart-card { position:relative; border:1px solid var(--dw-line); border-radius:8px; padding:12px; background:var(--dw-panel); }
+.dw-chart-scroll { position:relative; height:300px; overflow-x:auto; overflow-y:hidden; }
+.dw-chart-inner { position:relative; height:100%; width:100%; }
+.dw-chart-inner > canvas { position:absolute; inset:0; }
+.dw-root .dw-chart-expand { position:absolute; top:8px; right:8px; font-size:11px; padding:4px 8px; z-index:1; }
+.dw-chart-card:fullscreen { padding:24px; border-radius:0; }
+.dw-chart-card:fullscreen .dw-chart-scroll { height:calc(100vh - 48px); }
+.dw-root details { margin-top:12px; }
+.dw-retry,.dw-retention { display:grid; gap:12px; margin:16px 0; }
+.dw-retry input[type=checkbox],.dw-retention input[type=checkbox] { width:auto; margin-right:8px; align-self:start; }
+.dw-root [hidden] { display:none!important; }
+@media(max-width:640px) { .dw-chart-scroll { height:250px; } }

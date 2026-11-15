@@ -1,8 +1,7 @@
 """Dewey — Guaranteed delivery engine. Frankapps Built.
 
-Postgres is the durable scheduler and backlog; a broker is only a worker-pool
-transport. Declare a task, create work inside your own transaction, and let the
-dispatcher and the ledger handle delivery::
+Postgres is the ledger, the clock and the queue. Declare a task, create work
+inside your own transaction, and let ``dewey run`` deliver it::
 
     import dewey
 
@@ -16,6 +15,9 @@ Importing ``dewey`` pulls in no framework: the producer and worker APIs live in
 
 from importlib.metadata import PackageNotFoundError, version
 
+from dewey.alerts import on_alert
+from dewey.context import TaskContext, current_task
+from dewey.core.cron import cron, every
 from dewey.core.states import TaskStatus
 from dewey.errors import (
     DeweyError,
@@ -41,6 +43,7 @@ from dewey.policy import (
     resolve_policy,
     task,
 )
+from dewey.scheduling import schedule, schedules
 from dewey.serialization import encode_args, encode_kwargs
 
 try:
@@ -62,15 +65,22 @@ __all__ = [
     "RetryAfter",
     "SerializationError",
     "TaskPolicy",
+    "TaskContext",
     "TaskStatus",
     "TransientError",
     "UnknownTaskTypeError",
     "__version__",
     "clear_project_policies",
     "configure_policies",
+    "cron",
+    "current_task",
     "encode_args",
     "encode_kwargs",
+    "every",
+    "on_alert",
     "registry",
     "resolve_policy",
+    "schedule",
+    "schedules",
     "task",
 ]

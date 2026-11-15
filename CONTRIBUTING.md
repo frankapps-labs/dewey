@@ -10,14 +10,14 @@ solid rather than adding a new one.
 git clone https://github.com/frankapps-labs/dewey
 cd dewey
 make install          # uv sync with all extras
-make up               # Postgres + Redis in Docker, on offset ports
+make up               # Postgres in Docker, on an offset port
 make test-integration # the suite, against those containers
 make down
 ```
 
 If you already run Postgres locally, `make test` works too — point
 `DEWEY_TEST_DATABASE_URL` at it. The suite needs a real PostgreSQL: `FOR UPDATE SKIP
-LOCKED`, partial indexes, LISTEN/NOTIFY and committed claims cannot be proven against
+LOCKED`, partial indexes and committed claims cannot be proven against
 SQLite or a mock, and tests that pretend otherwise are worse than no tests.
 
 ## Before opening a pull request
@@ -26,8 +26,8 @@ SQLite or a mock, and tests that pretend otherwise are worse than no tests.
 make lint typecheck format-check test
 ```
 
-CI tests Python 3.11-3.14, Django 5.2 LTS and the current Django 6.x release, and
-the current Huey 3.x release. It also runs an installed-wheel smoke test. `make wheel-smoke` runs that last one locally if you have
+CI tests Python 3.11-3.14, Django 5.2 LTS and the current Django 6.x release. It also
+runs an installed-wheel smoke test. `make wheel-smoke` runs that last one locally if you have
 touched packaging, imports, or anything in `src/dewey/django/migrations/`.
 
 ### Which CI jobs can fail your pull request
@@ -60,7 +60,7 @@ compatibility, wheel, or human-approval gates.
 
 **Tests that would fail without the change.** Concurrency and recovery bugs in particular:
 if it involves two processes, a crash, or a duplicate delivery, the test should actually
-create that situation. `tests/test_dispatcher.py` has examples using threads and real
+create that situation. `tests/native/test_schedules.py` has examples using threads and real
 Postgres.
 
 **A migration when a model changes.** `make test` fails if models and migrations drift, so
@@ -91,10 +91,10 @@ Two things to expect:
 
 ## Things likely to be declined
 
-- **A scheduler.** Cron, Celery beat, Huey periodic and Kubernetes CronJobs already exist;
-  the documented pattern is to have one of them call `create_task`.
-- **Broker-side retries.** Dewey owns the attempt budget. Two retry engines over one task
-  is how work runs twice.
+- **A broker or another runner.** Dewey is one library on one database on purpose:
+  the worker, the clock and the ledger are the same system so there is no seam to lose
+  work in. Workers in other languages go through the [pull-runner](docs/pull-runners.md)
+  protocol rather than a second execution path.
 - **`.delay()` on the decorator.** It re-couples producers to worker imports, which is the
   thing Dewey is breaking.
 - **Auto-loading domain objects** into handlers. Handlers look up their own rows; that

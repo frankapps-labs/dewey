@@ -1,13 +1,12 @@
-# Test infrastructure for Dewey's own suite: Postgres for the ledger, Redis for the
-# Huey transport. Nothing here is needed to *use* Dewey — a consumer brings its own
-# Postgres, and Redis is only required if you use the Huey adapter.
+# Test infrastructure for Dewey's own suite: one Postgres. Nothing here is needed to
+# *use* Dewey — a consumer brings its own Postgres.
 #
-#   make up        start both, wait until healthy
+#   make up        start it, wait until healthy
 #   make test-all  run the suite against them
 #   make down      stop and remove volumes
 #
-# Ports are offset from the defaults so this cannot collide with a Postgres or Redis
-# you already run locally.
+# The port is offset from the default so this cannot collide with a Postgres you
+# already run locally.
 
 services:
   postgres:
@@ -27,13 +26,3 @@ services:
       # The test database is disposable; keeping it in RAM makes the suite quicker
       # and leaves nothing behind.
       - /var/lib/postgresql/data
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "56390:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 2s
-      timeout: 3s
-      retries: 30

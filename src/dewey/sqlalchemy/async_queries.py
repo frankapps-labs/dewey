@@ -8,11 +8,11 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dewey.core.heartbeat import DEFAULT_HEARTBEAT_STALE_SECONDS, DispatcherHeartbeat
+from dewey._worker.ledger import CLEAR_NATIVE, clear_native
+from dewey.core.heartbeat import DEFAULT_HEARTBEAT_STALE_SECONDS, WorkerHeartbeat
 from dewey.core.states import TaskStatus
 from dewey.core.types import TaskEntry
-from dewey.sqlalchemy.listen import notify_work_available_async
-from dewey.sqlalchemy.models import DispatcherHeartbeatModel, TaskEntryModel
+from dewey.sqlalchemy.models import TaskEntryModel, WorkerHeartbeatModel
 
 
 def _to_dataclass(row: TaskEntryModel) -> TaskEntry:
@@ -36,6 +36,7 @@ def _to_dataclass(row: TaskEntryModel) -> TaskEntry:
         completed_at=row.completed_at,
         idempotency_key=row.idempotency_key,
         metadata=row.task_metadata,
+        execution_timeout_s=row.execution_timeout_s,
         expires_at=row.expires_at,
         initial_scheduled_for=row.initial_scheduled_for,
         expired_at=row.expired_at,
@@ -46,27 +47,26 @@ def _to_list(rows: Sequence[TaskEntryModel]) -> list[TaskEntry]:
     return [_to_dataclass(r) for r in rows]
 
 
-async def get_dispatchers_async(
+async def get_workers_async(
     session: AsyncSession,
     *,
     database: str | None = None,
     queues: Sequence[str] | None = None,
     fresh_within_seconds: float = DEFAULT_HEARTBEAT_STALE_SECONDS,
     now: datetime | None = None,
-) -> list[DispatcherHeartbeat]:
-    """Fresh dispatchers matching the requested database identity and queues."""
+) -> list[WorkerHeartbeat]:
+    """Fresh workers matching the requested database identity and queues."""
     observed_at = now or datetime.now(UTC)
-    stmt = select(DispatcherHeartbeatModel).where(
-        DispatcherHeartbeatModel.last_seen_at
-        >= observed_at - timedelta(seconds=fresh_within_seconds)
+    stmt = select(WorkerHeartbeatModel).where(
+        WorkerHeartbeatModel.last_seen_at >= observed_at - timedelta(seconds=fresh_within_seconds)
     )
     if database is not None:
-        stmt = stmt.where(DispatcherHeartbeatModel.database == database)
-    result = await session.execute(stmt.order_by(DispatcherHeartbeatModel.last_seen_at.desc()))
+        stmt = stmt.where(WorkerHeartbeatModel.database == database)
+    result = await session.execute(stmt.order_by(WorkerHeartbeatModel.last_seen_at.desc()))
     requested = tuple(queues) if queues else None
     heartbeats = []
     for row in result.scalars():
-        heartbeat = DispatcherHeartbeat(
+        heartbeat = WorkerHeartbeat(
             instance_id=row.instance_id,
             dewey_version=row.dewey_version,
             backend=row.backend,
@@ -144,13 +144,17 @@ async def get_stuck_async(
     session: AsyncSession,
     older_than_minutes: int = 10,
 ) -> list[TaskEntry]:
-    """Tasks in PROCESSING too long — sweep candidates."""
+    """PROCESSING tasks no worker owns that started long ago: left by ``process_task``."""
     threshold = datetime.now(UTC) - timedelta(minutes=older_than_minutes)
     stmt = (
         select(TaskEntryModel)
         .where(
             TaskEntryModel.status == TaskStatus.PROCESSING.value,
             TaskEntryModel.started_at < threshold,
+            TaskEntryModel.dispatch_token.is_(None),
+            TaskEntryModel.worker_id.is_(None),
+            TaskEntryModel.lease_expires_at.is_(None),
+            TaskEntryModel.execution_deadline_at.is_(None),
         )
         .order_by(TaskEntryModel.started_at)
     )
@@ -233,7 +237,12 @@ async def get_recent_async(
 
 async def retry_task_async(session: AsyncSession, task_id: str) -> TaskEntry | None:
     """Reset a failed/dead task back to pending for re-processing."""
-    stmt = select(TaskEntryModel).where(TaskEntryModel.id == task_id).with_for_update()
+    stmt = (
+        select(TaskEntryModel)
+        .where(TaskEntryModel.id == task_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     result = await session.execute(stmt)
     task = result.scalar_one_or_none()
     if task is None:
@@ -249,8 +258,9 @@ async def retry_task_async(session: AsyncSession, task_id: str) -> TaskEntry | N
     task.scheduled_for = None
     task.error = ""
     task.attempts = 0
+    clear_native(task)
+    task.execution_token = None
     await session.flush()
-    await notify_work_available_async(session, kind="task", entry_id=task.id, queue=task.queue)
     return _to_dataclass(task)
 
 
@@ -261,7 +271,7 @@ async def bulk_retry_async(
 ) -> int:
     """
     Retry all failed (or dead) tasks, optionally filtered by type.
-    Returns count of tasks re-enqueued.
+    Returns the number of tasks made pending again.
 
     Raises ValueError if the source status doesn't allow transition to PENDING.
     """
@@ -270,13 +280,6 @@ async def bulk_retry_async(
             f"Cannot retry tasks in {status.value!r} state — "
             f"no transition {status.value} → pending is allowed."
         )
-    ids_stmt = select(TaskEntryModel.id, TaskEntryModel.queue).where(
-        TaskEntryModel.status == status.value
-    )
-    if task_type:
-        ids_stmt = ids_stmt.where(TaskEntryModel.task_type == task_type)
-    rows = list((await session.execute(ids_stmt)).all())
-
     stmt = update(TaskEntryModel).where(TaskEntryModel.status == status.value)
     if task_type:
         stmt = stmt.where(TaskEntryModel.task_type == task_type)
@@ -285,17 +288,22 @@ async def bulk_retry_async(
         scheduled_for=None,
         error="",
         attempts=0,
+        execution_token=None,
+        **CLEAR_NATIVE,
     )
     result = await session.execute(stmt)
     await session.flush()
-    for task_id, queue in rows:
-        await notify_work_available_async(session, kind="task", entry_id=task_id, queue=queue)
     return result.rowcount  # type: ignore[return-value]
 
 
 async def kill_task_async(session: AsyncSession, task_id: str) -> TaskEntry | None:
     """Force a task to DEAD — stop retrying."""
-    stmt = select(TaskEntryModel).where(TaskEntryModel.id == task_id).with_for_update()
+    stmt = (
+        select(TaskEntryModel)
+        .where(TaskEntryModel.id == task_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     result = await session.execute(stmt)
     task = result.scalar_one_or_none()
     if task is None:
@@ -306,6 +314,8 @@ async def kill_task_async(session: AsyncSession, task_id: str) -> TaskEntry | No
         return _to_dataclass(task)
 
     task.status = TaskStatus.DEAD.value
+    clear_native(task)
+    task.execution_token = None
     await session.flush()
     return _to_dataclass(task)
 

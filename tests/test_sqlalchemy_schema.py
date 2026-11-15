@@ -9,8 +9,8 @@ import dataclasses
 from sqlalchemy import JSON, DateTime, String
 from sqlalchemy.dialects import postgresql
 
-from dewey.core.heartbeat import DispatcherHeartbeat
-from dewey.sqlalchemy.models import Base, DispatcherHeartbeatModel, TaskEntryModel
+from dewey.core.heartbeat import WorkerHeartbeat
+from dewey.sqlalchemy.models import Base, TaskEntryModel, WorkerHeartbeatModel
 
 
 def _index(table, name):
@@ -47,29 +47,29 @@ class TestTaskEntryExpiryColumns:
             assert terminal not in where
 
 
-class TestDispatcherHeartbeatModel:
+class TestWorkerHeartbeatModel:
     def test_table_name_and_registration(self):
-        assert DispatcherHeartbeatModel.__tablename__ == "dewey_dispatcher_heartbeats"
+        assert WorkerHeartbeatModel.__tablename__ == "dewey_dispatcher_heartbeats"
         assert "dewey_dispatcher_heartbeats" in Base.metadata.tables
 
     def test_primary_key_is_instance_id(self):
-        table = DispatcherHeartbeatModel.__table__
+        table = WorkerHeartbeatModel.__table__
         assert [col.name for col in table.primary_key.columns] == ["instance_id"]
         assert isinstance(table.c.instance_id.type, String)
 
     def test_columns_match_the_framework_free_contract(self):
         """One source of truth: the table carries exactly the dataclass fields."""
-        table_columns = {col.name for col in DispatcherHeartbeatModel.__table__.columns}
-        contract_fields = {f.name for f in dataclasses.fields(DispatcherHeartbeat)}
+        table_columns = {col.name for col in WorkerHeartbeatModel.__table__.columns}
+        contract_fields = {f.name for f in dataclasses.fields(WorkerHeartbeat)}
         assert table_columns == contract_fields
 
     def test_queues_is_nullable_json(self):
-        column = DispatcherHeartbeatModel.__table__.c.queues
+        column = WorkerHeartbeatModel.__table__.c.queues
         assert column.nullable is True
         assert isinstance(column.type, JSON)
 
     def test_timestamps_are_required_and_timezone_aware(self):
-        table = DispatcherHeartbeatModel.__table__
+        table = WorkerHeartbeatModel.__table__
         for name in ("started_at", "last_seen_at"):
             column = table.c[name]
             assert column.nullable is False, name
@@ -77,14 +77,14 @@ class TestDispatcherHeartbeatModel:
             assert column.type.timezone is True, name
 
     def test_last_seen_index_bounds_freshness_and_cleanup_scans(self):
-        index = _index(DispatcherHeartbeatModel.__table__, "ix_dewey_heartbeats_last_seen")
+        index = _index(WorkerHeartbeatModel.__table__, "ix_dewey_heartbeats_last_seen")
         assert [col.name for col in index.columns] == ["last_seen_at"]
 
     def test_backend_database_index_bounds_readiness_matching(self):
-        index = _index(DispatcherHeartbeatModel.__table__, "ix_dewey_heartbeats_backend_database")
+        index = _index(WorkerHeartbeatModel.__table__, "ix_dewey_heartbeats_backend_database")
         assert [col.name for col in index.columns] == ["backend", "database"]
 
     def test_no_ttl_or_host_identity_columns(self):
         """Staleness is reader-side; the table stores no TTL, hostname, or PID."""
-        names = {col.name for col in DispatcherHeartbeatModel.__table__.columns}
+        names = {col.name for col in WorkerHeartbeatModel.__table__.columns}
         assert not names & {"ttl", "expires_at", "hostname", "pid", "dsn", "environment"}

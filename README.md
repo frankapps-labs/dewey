@@ -5,41 +5,32 @@
 [![PyPI](https://img.shields.io/pypi/v/dewey.svg)](https://pypi.org/project/dewey/)
 [![Python](https://img.shields.io/pypi/pyversions/dewey.svg)](https://pypi.org/project/dewey/)
 
-**Guaranteed delivery engine for Python.** Postgres is the scheduler and the backlog;
-your broker is just a worker pool.
+**Guaranteed task delivery for Python, on Postgres.** Durable tasks, schedules and a
+worker in one library. No broker.
 
-Most task queues keep the backlog in Redis. A lost message is then lost work, a crashed
-worker leaves nothing behind to explain itself, and "what is still pending for this
-customer?" has no good answer. Dewey inverts that: a task is a Postgres row from the
-moment it exists, a dispatcher hands ready rows to your broker, and the broker's only
-job is carrying a task ID to a worker.
+Most task queues keep the backlog in a broker and the clock in a separate scheduler.
+A lost message is then lost work, a scheduler that was down at 03:15 leaves no trace
+that anything was missed, and "what is still pending for this customer?" has no good
+answer. Dewey keeps all of it in the database you already run:
 
-Losing the broker costs you latency. It cannot cost you work.
+- **A task is a Postgres row from the moment it exists**, created in your own
+  transaction. Commit, and it will run. Roll back, and it never existed.
+- **A scheduled run is a row too**: one per tick, created exactly once however many
+  workers you run, and on record even when it was missed.
+- **One process type runs everything.** `dewey run` claims, executes, retries,
+  recovers and keeps the clock. Scale it by count.
 
 ## Install
 
 ```bash
-pip install dewey                        # core only
-pip install "dewey[sqlalchemy]"          # SQLAlchemy models + sync API
-pip install "dewey[sqlalchemy,async]"    # SQLAlchemy sync + async API
-pip install "dewey[django]"              # Django models + API
-pip install "dewey[huey]"                # Huey transport adapter
+pip install "dewey[django]"              # Django models, migrations and manage.py dewey
+pip install "dewey[sqlalchemy]"          # SQLAlchemy models, sync and async API
+pip install "dewey[async]"               # the same, plus the asyncpg driver
 ```
 
-Requires Python 3.11+ and PostgreSQL 13+.
-
-**Which extra do I need?** Dewey integrates at the database layer, not the web layer, so
-pick by ORM:
-
-| You use | Install | Why |
-|---|---|---|
-| Django | `dewey[django]` | Django models and migrations ship with it, plus a `dewey_dispatcher` management command |
-| FastAPI, Starlette, Litestar, Flask + SQLAlchemy | `dewey[sqlalchemy,async]` (or drop `async` for sync) | Dewey never touches your web framework — it only needs your ORM |
-| No web framework at all | `dewey[sqlalchemy]` | A script or worker fleet is a first-class consumer |
-
-There is no `fastapi` extra because there is nothing for it to install: an async FastAPI
-app is a SQLAlchemy async consumer, and that path has its own dispatcher
-(`AsyncDispatcher`) so an asyncpg deployment never needs a synchronous driver.
+Requires Python 3.11+ and PostgreSQL 13+. Dewey integrates at the database layer, so
+pick by ORM: a FastAPI, Starlette, Litestar or Flask application is a SQLAlchemy
+consumer, and a script with no web framework is a first-class one.
 
 ## Quickstart
 
@@ -47,6 +38,7 @@ app is a SQLAlchemy async consumer, and that path has its own dispatcher
 data.
 
 ```python
+# myapp/tasks.py
 import dewey
 
 @dewey.task("agent.notify", max_attempts=5, backoff=dewey.Constant(3))
@@ -62,8 +54,7 @@ def notify_agent(command_id: str) -> None:
         raise dewey.NonRetryableError(str(exc))  # dead-letter now, don't burn attempts
 ```
 
-**2. Create work inside your own transaction.** Producers never import handlers and
-never touch the broker.
+**2. Create work inside your own transaction.** Producers never import handlers.
 
 ```python
 from dewey.django import create_task
@@ -74,90 +65,74 @@ with transaction.atomic():
 # Roll back, and neither the command nor the task ever existed.
 ```
 
-**3. Run the dispatcher.** It claims ready rows, hands IDs to the transport, and runs
-the recovery sweep.
-
-```bash
-python manage.py dewey_dispatcher
-```
-
-**4. Run a worker.** Ordinary Huey. For Django, `dewey.contrib.django_huey` is the
-wiring: importing it registers Dewey's processor on `huey.contrib.djhuey.HUEY` exactly
-once, with Huey retries disabled and `close_db` around each task.
+**3. Schedule what should happen on a clock.**
 
 ```python
-# settings.py
-HUEY = {...}  # Huey's normal Django configuration
-DEWEY = {"DISPATCH": "dewey.contrib.django_huey.dispatch"}
-
-# myapp/tasks.py — imported by Huey's normal Django task discovery
-from dewey.contrib.django_huey import adapter, dispatch  # noqa: F401
+@dewey.task("sessions.purge", schedule=dewey.cron("15 3 * * *", tz="Europe/London"))
+def purge_expired_sessions() -> None:
+    ...
 ```
 
 ```bash
-python manage.py run_huey
+python manage.py dewey schedules apply     # in your release step
 ```
 
-`DEWEY["DISPATCH"]` must name a module-level callable — it is resolved with Django's
-`import_string`, so an object traversal such as `"myapp.tasks.adapter.dispatch"` cannot
-be imported. If you wire Huey yourself, expose a module-level wrapper:
+**4. Run workers.**
 
-```python
-# myapp/tasks.py
-from huey.contrib.djhuey import HUEY, close_db
-from dewey.adapters.huey import HueyAdapter
-from dewey.django import process_task
-
-adapter = HueyAdapter(HUEY)
-adapter.register(close_db(process_task))
-
-def dispatch(task_id: str):
-    return adapter.dispatch(task_id)   # DEWEY = {"DISPATCH": "myapp.tasks.dispatch"}
+```bash
+python manage.py dewey run
 ```
 
-Check the active setup and dispatcher readiness with `python manage.py dewey_doctor`
-(or `--format json` for monitoring/CI). It validates configuration and schema, reports
-what the in-process handler registry can and cannot prove, and fails closed without a
-fresh database-backed dispatcher heartbeat.
+**5. See what is going on.**
 
-That is the whole loop. SQLAlchemy — sync and async — works the same way; see
-[docs/getting-started.md](https://github.com/frankapps-labs/dewey/blob/main/docs/getting-started.md).
+```bash
+python manage.py dewey queues
+python manage.py dewey dlq list
+python manage.py dewey doctor
+```
+
+That is the whole loop. SQLAlchemy, sync and async, works the same way with
+`dewey run --app myapp.worker:create_application`; see
+[getting started](https://github.com/frankapps-labs/dewey/blob/main/docs/getting-started.md).
 
 ## What you get
 
-- **A committed task is a task that will run.** The row and the wake-up commit together,
-  so a rolled-back transaction leaves nothing behind and a committed one is never
-  forgotten.
-- **Retries, backoff and dead-lettering as policy**, resolved in one place instead of
-  scattered across decorators and handler bodies. Handlers never sleep, never retry
-  themselves.
-- **Crash recovery you can reason about.** A dispatcher that dies mid-dispatch, a worker
-  killed mid-task, a broker that drops a message: each is a state in the ledger, with a
-  sweep that reclaims it.
-- **A queryable backlog.** `SELECT count(*) FROM task_entries WHERE status = 'pending'`
-  is the answer, not a Redis introspection script.
-- **Duplicate delivery is harmless.** Claims are atomic, so a redelivered task ID is a
-  logged no-op. Producers that need request idempotency can use `create_or_get_task()`;
-  conflicting reuse raises `IdempotencyConflictError` without logging argument values.
-- **Deadlines are native.** `expires_at` is an absolute aware timestamp. Dewey records
-  `EXPIRED` before dispatch and again before handler invocation, without consuming an
-  attempt; `now == expires_at` is expired.
-- **An audit trail**: attempts, errors, timestamps and correlation metadata per row.
+- **A committed task is a task that will run.** There is no second system to hand it
+  to, so there is no window in which it can be lost.
+- **Retries, backoff and dead-lettering as policy**, resolved in one place. Handlers
+  never sleep and never retry themselves.
+- **Schedules with a memory.** Cron expressions and intervals declared in code, with a
+  per-schedule answer to "what if we were down?" (`skip`, `once`, `all`) and "what if
+  the last run is still going?". Missed ticks are counted and alertable.
+- **Crash recovery you can reason about.** Every claim is a lease in the ledger. A
+  worker killed mid-task loses the lease and another worker retries the task.
+- **Time limits.** A hard timeout per task, a deadline the handler can read, and
+  per-task database statement and lock timeouts.
+- **A queryable backlog.** `dewey queues`, or
+  `SELECT count(*) FROM task_entries WHERE status = 'pending'`.
+- **Operations built in.** One command (and the JSON API under it) for queues, tasks,
+  dead letters, schedules and a readiness check; one hook for alerts on dead work,
+  recovered work and missed ticks.
+- **Idempotent creation.** `create_or_get_task()` deduplicates on a key and raises
+  `IdempotencyConflictError` on conflicting reuse.
+- **Trace context carried across**: the creator's correlation IDs (and W3C
+  `traceparent`) are restored around the handler.
 
 ## How it fits together
 
 ```text
-  producer                  Postgres                 dispatcher            worker
- ─────────────────────────────────────────────────────────────────────────────────
-  create_task()  ──────►  task_entries
-                          (pending)
-                             │  NOTIFY on commit
-                             ▼
-                          claim (SKIP LOCKED)  ◄────  LISTEN + poll
-                          (dispatching)  ─────────►  dispatch(task_id) ──►  broker
-                                                                              │
-                          (processing)  ◄──────────────────────────────  process_task
-                          (completed / failed / dead)
+  producer                    Postgres                       dewey run (N copies)
+ ───────────────────────────────────────────────────────────────────────────────────
+  create_task()  ──────►   task_entries  (pending)
+                                │
+  schedules ── due tick ──►     │   one row per tick
+                                ▼
+                           claim, FOR UPDATE SKIP LOCKED  ◄──── worker parent
+                           (dispatching: leased)
+                                │
+                           (processing)  ◄──── task process runs the handler
+                                │
+                           (completed / failed → retry / dead)
 ```
 
 The state machine:
@@ -165,57 +140,53 @@ The state machine:
 ```text
 PENDING ──► DISPATCHING ──► PROCESSING ──► COMPLETED
    ▲             │               │
-   │             │               ├──► FAILED ──► DISPATCHING (direct retry when due)
+   │             │               ├──► FAILED ──► DISPATCHING (retry when due)
    │             │               │         └───► DEAD        (attempts exhausted)
-   └─────────────┴───────────────┘                            (recovery sweep)
+   └─────────────┴───────────────┘                            (lease expired: recovered)
      └──────────────► EXPIRED ◄──────────────┘                (deadline before start)
 ```
 
-`PENDING → PROCESSING` is also legal, for in-process execution with no broker in the
-path. `DEAD → PENDING` is a manual retry.
+`DEAD → PENDING` is a manual retry.
 
 ## Operational notes
 
-- **The dispatcher must be running for retries to happen.** Due `FAILED` rows are
-  claimed directly and the dispatcher wakes at the earliest known retry/schedule; the
-  periodic sweep is crash recovery, not ordinary retry scheduling.
-- **Polling is the correctness path; LISTEN is an optimisation.** The dispatcher polls
-  regardless, which is what recovers missed notifications and newly-due scheduled work.
-- **`dispatch_timeout_seconds` must exceed your worst-case broker backlog**, or work
-  that is merely waiting gets reclaimed and dispatched twice.
-- **Dewey owns retry, not your broker.** The Huey adapter registers with `retries=0` on
-  purpose: two retry engines over one task is how work runs twice.
+- **Run it in a container.** The worker isolates each task in its own process and
+  needs an enclosing kill-all boundary; any container runtime provides one.
+- **Handlers must be idempotent.** Delivery is at-least-once: a worker killed between
+  a side effect and its commit means the task runs again.
+- **Apply schedules in your release step.** Workers never write schedule definitions,
+  so a rolling deploy cannot make old and new code fight over them. `dewey doctor`
+  tells you when you forgot.
 - **Give Dewey its own bounded connection pool** when it shares a database with your
-  request handlers, so background pressure cannot become user-visible latency. See
+  request handlers. See
   [sharing a database](https://github.com/frankapps-labs/dewey/blob/main/docs/getting-started.md#sharing-a-database-with-your-application).
-- **Producer, dispatcher and worker are three database roles.** The producer's
-  `create_task` must use the same alias — and therefore the same connection and
-  transaction — as the business write it belongs to; that is what makes the rollback
-  guarantee real. The dispatcher (`DEWEY["DATABASE"]`) and worker
-  (`DEWEY["WORKER_DATABASE"]`) open their own connections after commit. Two aliases
-  pointing at one physical Postgres are still two connections and two transactions, so
-  never route producer `TaskEntry` writes to a background alias.
+- **Producers write on the business transaction's connection.** `create_task` must use
+  the same database alias as the business write it belongs to; that is what makes the
+  rollback guarantee real.
 
 ## Documentation
 
 | Guide | What it covers |
 |---|---|
-| [Getting started](https://github.com/frankapps-labs/dewey/blob/main/docs/getting-started.md) | SQLAlchemy sync, SQLAlchemy async, and Django, end to end, plus sharing a database with your app |
-| [Concepts](https://github.com/frankapps-labs/dewey/blob/main/docs/concepts.md) | States, claims, policy resolution, and the limits of what Dewey guarantees |
-| [Adapters](https://github.com/frankapps-labs/dewey/blob/main/docs/adapters.md) | The transport contract, and writing your own |
-| [From Huey or Celery](https://github.com/frankapps-labs/dewey/blob/main/docs/onboarding/from-huey-celery.md) | Pattern-by-pattern migration, one task type at a time |
-| [Query API](https://github.com/frankapps-labs/dewey/blob/main/docs/query-api.md) | Backlog, stuck work, dead letters, manual retry, purging |
-| [Logging](https://github.com/frankapps-labs/dewey/blob/main/docs/logging.md) | Correlation metadata across producer, dispatcher and worker |
+| [Getting started](https://github.com/frankapps-labs/dewey/blob/main/docs/getting-started.md) | Django, SQLAlchemy sync and async, end to end |
+| [Concepts](https://github.com/frankapps-labs/dewey/blob/main/docs/concepts.md) | States, claims and leases, policy, and the limits of what Dewey guarantees |
+| [Schedules](https://github.com/frankapps-labs/dewey/blob/main/docs/schedules.md) | Cron and intervals, plan/apply, catch-up and overlap, daylight saving |
+| [The worker](https://github.com/frankapps-labs/dewey/blob/main/docs/native-worker.md) | `dewey run`, settings, time limits, drain and exit statuses |
+| [Operations](https://github.com/frankapps-labs/dewey/blob/main/docs/operations.md) | The `dewey` command, doctor, alerts and the operations API |
+| [Idempotency](https://github.com/frankapps-labs/dewey/blob/main/docs/idempotency.md) | Creation dedupe, stable handler effect keys, and what stays your job |
+| [Query API](https://github.com/frankapps-labs/dewey/blob/main/docs/query-api.md) | Backlog, dead letters, manual retry, purging |
+| [Logging](https://github.com/frankapps-labs/dewey/blob/main/docs/logging.md) | Correlation metadata from producer to handler |
+| [Pull runners](https://github.com/frankapps-labs/dewey/blob/main/docs/pull-runners.md) | Serving workers in other languages through your own gateway |
+| [Upgrading to 0.6](https://github.com/frankapps-labs/dewey/blob/main/docs/upgrading-0.6.md) | From the broker-and-dispatcher shape of 0.5 |
 
 ## Stability
 
 On `0.x` the public API may change between minor versions. `1.0` waits until the API has
 been proven by real production use.
 
-The release is deliberately one thing: durable task delivery. Multi-channel notification
-delivery is **not** part of it — an earlier parallel ledger was removed before publishing
-rather than shipped half-committed. Future notification tooling can build channel handlers
-on ordinary Dewey tasks without adding another execution engine.
+Dewey does one thing: durable background work on Postgres, from the row to the clock
+to the runner. Multi-channel notification delivery is not part of it; notification
+tooling can build channel handlers on ordinary Dewey tasks.
 
 ## Releases
 
@@ -239,7 +210,7 @@ Two things to know when reading the log:
 
 ```bash
 make install           # install with dev dependencies
-make up                # Postgres + Redis for the test suite
+make up                # Postgres for the test suite
 make test-integration  # run the suite against them
 make wheel-smoke       # build a wheel and exercise it in a clean venv
 make lint typecheck    # ruff + basedpyright
@@ -247,7 +218,7 @@ make down
 ```
 
 The suite runs against real Postgres by design: `FOR UPDATE SKIP LOCKED`, partial
-indexes, LISTEN/NOTIFY and committed claims cannot be proven against a fake.
+indexes and committed claims cannot be proven against a fake.
 
 ## Acknowledgements
 

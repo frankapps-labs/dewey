@@ -20,11 +20,11 @@ from dewey.django import get_stats, get_dead, retry_task       # no session
 | `get_pending(..., limit=50)` | Waiting to be claimed, oldest first |
 | `get_dispatching(..., limit=50)` | Claimed and handed to the transport, no worker started yet |
 | `get_processing(..., limit=50)` | Currently running |
-| `get_stuck(..., older_than_minutes=10)` | `PROCESSING` for too long — sweep candidates |
+| `get_stuck(..., older_than_minutes=10)` | `PROCESSING` for too long without a worker's lease (inline executions) |
 | `get_failed(..., limit=50)` | Failed, awaiting their retry time |
 | `get_dead(..., limit=50)` | Dead-lettered, needing a human |
 | `get_expired(..., limit=50)` | Missed their absolute start deadline, with `expires_at`/`expired_at` audit fields |
-| `get_dispatchers(...)` | Fresh database-backed dispatcher heartbeats matching database/queue scope |
+| `get_workers(...)` | Workers with a fresh heartbeat, matching database/queue scope |
 | `get_task(..., task_id)` | One row in full |
 | `get_recent(..., limit=50)` | Recent activity, filtered |
 
@@ -36,7 +36,7 @@ get_stats()
 
 Reading these together is usually how you diagnose:
 
-- **`pending` climbing** — no dispatcher running, or it cannot keep up.
+- **`pending` climbing** — no worker serving that queue, or not enough of them.
 - **`dispatching` climbing** — the transport took the IDs but workers are not picking them
   up: no consumer running, or the pool is saturated.
 - **`processing` stuck on a fixed set** — handlers are hanging. `get_stuck()` names them.

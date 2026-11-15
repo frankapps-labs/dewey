@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from dewey.core.heartbeat import DispatcherHeartbeat
+from dewey.core.heartbeat import WorkerHeartbeat
 
 
 def _make_heartbeat(**overrides):
@@ -19,10 +19,10 @@ def _make_heartbeat(**overrides):
         "last_seen_at": datetime.now(UTC),
     }
     defaults.update(overrides)
-    return DispatcherHeartbeat(**defaults)
+    return WorkerHeartbeat(**defaults)
 
 
-class TestDispatcherHeartbeat:
+class TestWorkerHeartbeat:
     def test_carries_its_fields(self):
         started = datetime.now(UTC)
         hb = _make_heartbeat(started_at=started, last_seen_at=started)
@@ -47,13 +47,13 @@ class TestDispatcherHeartbeat:
         """The contract is public API — exported from the core namespace."""
         import dewey.core
 
-        assert dewey.core.DispatcherHeartbeat is DispatcherHeartbeat
-        assert "DispatcherHeartbeat" in dewey.core.__all__
+        assert dewey.core.WorkerHeartbeat is WorkerHeartbeat
+        assert "WorkerHeartbeat" in dewey.core.__all__
 
     def test_exposes_exactly_the_frozen_contract_fields(self):
         """Heartbeats live in a shared database: no hostname, PID, DSN,
         credentials, or process environment — only these seven fields."""
-        names = {f.name for f in dataclasses.fields(DispatcherHeartbeat)}
+        names = {f.name for f in dataclasses.fields(WorkerHeartbeat)}
         assert names == {
             "instance_id",
             "dewey_version",
